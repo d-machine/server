@@ -16,7 +16,6 @@ from __future__ import annotations
 import io
 import logging
 import re
-import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +25,8 @@ import requests
 
 from app.cron.bhavcopy.constants import FileStatus
 from app.cron.bhavcopy.common import (
-    BSE_HEADERS, date_dir, record_status, already_downloaded,
+    BSE_HEADERS, GCS_BUCKET, gcs_blob_name, gcs_blob_exists, upload_df_to_gcs,
+    record_status, already_downloaded,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ def _fname(trade_date) -> str:
 
 def download(trade_date, force: bool = False) -> bool:
     fname = _fname(trade_date)
-    dest  = date_dir(trade_date) / fname
+    blob  = gcs_blob_name(trade_date, fname)
 
     if not force and already_downloaded(fname):
         logger.info("[%s] %s already downloaded — skipping", SOURCE, trade_date)
@@ -61,9 +61,9 @@ def download(trade_date, force: bool = False) -> bool:
         df = pd.read_csv(io.StringIO(resp.text))
         if df.empty:
             raise ValueError("Empty response")
-        df.to_csv(dest, index=False)
+        upload_df_to_gcs(df, blob)
         record_status(fname, trade_date, SOURCE, FileStatus.DOWNLOADED)
-        logger.info("[%s] Saved %d rows -> %s", SOURCE, len(df), dest)
+        logger.info("[%s] Uploaded %d rows -> gs://%s/%s", SOURCE, len(df), GCS_BUCKET, blob)
         return True
     except Exception as exc:
         logger.error("[%s] Failed %s: %s", SOURCE, trade_date, exc, exc_info=True)
@@ -79,7 +79,7 @@ def register(file_path: Path, force: bool = False) -> bool:
 
     trade_date = datetime.strptime(match.group(1), "%Y%m%d").date()
     fname = _fname(trade_date)
-    dest  = date_dir(trade_date) / fname
+    blob  = gcs_blob_name(trade_date, fname)
 
     if not file_path.exists():
         logger.error("[%s] File not found: %s", SOURCE, file_path)
@@ -90,17 +90,19 @@ def register(file_path: Path, force: bool = False) -> bool:
         logger.error("[%s] Already synced — cannot override: %s", SOURCE, fname)
         return False
 
-    if dest.exists() and not force:
-        logger.error("[%s] Destination exists, use --force to overwrite: %s", SOURCE, dest)
+    if gcs_blob_exists(blob) and not force:
+        logger.error("[%s] Blob exists in GCS, use --force to overwrite: gs://%s/%s",
+                     SOURCE, GCS_BUCKET, blob)
         return False
 
     try:
         df = pd.read_csv(file_path)
         if df.empty:
             raise ValueError("Empty file")
-        shutil.copy2(file_path, dest)
+        upload_df_to_gcs(df, blob)
         record_status(fname, trade_date, SOURCE, FileStatus.DOWNLOADED)
-        logger.info("[%s] Registered %s -> %s (%d rows)", SOURCE, file_path.name, dest, len(df))
+        logger.info("[%s] Registered %s -> gs://%s/%s (%d rows)",
+                    SOURCE, file_path.name, GCS_BUCKET, blob, len(df))
         return True
     except Exception as exc:
         logger.error("[%s] Failed to register %s: %s", SOURCE, file_path.name, exc, exc_info=True)

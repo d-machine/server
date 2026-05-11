@@ -15,22 +15,18 @@ Unknown instruments are counted and logged but not created here.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import date, datetime
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 from sqlalchemy import text
 from app.cron.bhavcopy.constants import FileStatus
+from app.cron.bhavcopy.common import gcs_blob_name, gcs_blob_exists, download_df_from_gcs
 
 from app.database import engine
 from app.cron.fetch_prices import _upsert_daily as _upsert_daily_prices, _upsert_latest as _upsert_latest_prices
 
 logger = logging.getLogger(__name__)
-
-DATA_DIR     = Path(os.getenv("DATA_PATH", "data"))
-BHAVCOPY_DIR = DATA_DIR / "bhavcopy"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -288,10 +284,9 @@ def sync_file(row: dict) -> dict:
     source     = row["source"]
     trade_date = row["trade_date"]
 
-    # Locate file
-    file_path = BHAVCOPY_DIR / trade_date / file_name
-    if not file_path.exists():
-        err = f"File not found: {file_path}"
+    blob_name = gcs_blob_name(date.fromisoformat(trade_date), file_name)
+    if not gcs_blob_exists(blob_name):
+        err = f"Blob not found in GCS: {blob_name}"
         logger.error(f"[SYNC] {err}")
         _mark_status(file_name, FileStatus.SYNC_FAILED, error=err)
         return {"file_name": file_name, "status": "sync_failed", "rows_synced": 0}
@@ -305,7 +300,7 @@ def sync_file(row: dict) -> dict:
 
     logger.info(f"[SYNC] Processing {file_name} ({source})")
     try:
-        df = pd.read_csv(file_path, low_memory=False)
+        df = download_df_from_gcs(blob_name)
 
         with engine.begin() as conn:
             price_rows = parser(df, conn)

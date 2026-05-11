@@ -1,6 +1,8 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Query
@@ -12,7 +14,16 @@ from app.cron.populate_instruments import run_all as populate_instruments
 from app.cron.download_bhavcopy import download_all as download_bhavcopy
 from app.cron.sync_bhavcopy import sync_pending as sync_bhavcopy
 
-logging.basicConfig(level=logging.INFO)
+_logs_dir = Path(os.getenv("LOGS_PATH", "logs"))
+_logs_dir.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(_logs_dir / "app.log"),
+    ],
+)
 logger = logging.getLogger(__name__)
 
 

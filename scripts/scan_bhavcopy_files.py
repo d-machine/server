@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy import text
 from app.database import engine
 from app.cron.bhavcopy.constants import FileStatus
-from app.cron.bhavcopy.common import BHAVCOPY_DIR
+from app.cron.bhavcopy.common import gcs_blob_exists
 
 # Expected filename templates per source: {YYYYMMDD} placeholder
 SOURCES = {
@@ -51,18 +51,12 @@ def iter_weekdays(start: date, end: date):
 def file_exists(trade_date: date, source: str) -> tuple[bool, str]:
     """
     Returns (found, canonical_filename).
-    Checks all filename variants (e.g. .csv and .csv.zip for NSE).
+    Checks GCS for the canonical blob (we always upload the extracted CSV).
     """
-    date_str = trade_date.strftime("%Y%m%d")
-    day_dir  = BHAVCOPY_DIR / trade_date.isoformat()
+    date_str  = trade_date.strftime("%Y%m%d")
     canonical = CANONICAL[source].format(date_str)
-
-    for tpl in SOURCES[source]:
-        fname = tpl.format(date_str)
-        if (day_dir / fname).exists():
-            return True, canonical
-
-    return False, canonical
+    blob_name = f"bhavcopy/{trade_date.isoformat()}/{canonical}"
+    return gcs_blob_exists(blob_name), canonical
 
 
 def scan(start: date, end: date, dry_run: bool = False):

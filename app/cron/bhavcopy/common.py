@@ -3,13 +3,15 @@ Shared utilities for all bhavcopy scripts.
 """
 from __future__ import annotations
 
+import io
 import logging
 import os
 from datetime import date
-from pathlib import Path
 from typing import Optional
 
+import pandas as pd
 import requests
+from google.cloud import storage as _gcs
 from sqlalchemy import text
 
 from app.database import engine
@@ -17,8 +19,7 @@ from app.cron.bhavcopy.constants import FileStatus
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR     = Path(os.getenv("DATA_PATH", "data"))
-BHAVCOPY_DIR = DATA_DIR / "bhavcopy"
+GCS_BUCKET = os.getenv("GCS_BHAVCOPY_BUCKET", "arthdesk-bhavcopy")
 
 NSE_HEADERS = {
     "sec-ch-ua-platform": '"Android"',
@@ -50,11 +51,33 @@ BSE_HEADERS = {
                   "Mobile Safari/537.36 Edg/147.0.0.0",
 }
 
+_gcs_client: _gcs.Client | None = None
 
-def date_dir(trade_date: date) -> Path:
-    d = BHAVCOPY_DIR / trade_date.isoformat()
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+
+def _bucket() -> _gcs.Bucket:
+    global _gcs_client
+    if _gcs_client is None:
+        _gcs_client = _gcs.Client()
+    return _gcs_client.bucket(GCS_BUCKET)
+
+
+def gcs_blob_name(trade_date: date, fname: str) -> str:
+    return f"bhavcopy/{trade_date.isoformat()}/{fname}"
+
+
+def gcs_blob_exists(blob_name: str) -> bool:
+    return _bucket().blob(blob_name).exists()
+
+
+def upload_df_to_gcs(df: pd.DataFrame, blob_name: str) -> None:
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    _bucket().blob(blob_name).upload_from_string(buf.getvalue(), content_type="text/csv")
+
+
+def download_df_from_gcs(blob_name: str) -> pd.DataFrame:
+    data = _bucket().blob(blob_name).download_as_bytes()
+    return pd.read_csv(io.BytesIO(data))
 
 
 def record_status(fname: str, trade_date: date, source: str,

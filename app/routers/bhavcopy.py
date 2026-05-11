@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.cron.bhavcopy import nse_eq, nse_fo, bse_eq, bse_fo, amfi, mcx
-from app.cron.bhavcopy.common import date_dir
+from app.cron.bhavcopy.common import gcs_blob_name, gcs_blob_exists
 from app.cron.bhavcopy.constants import FileStatus
 from app.cron.bhavcopy.register_file import register as register_file
 
@@ -252,14 +252,14 @@ def sync_inbox(force: bool = False):
 
         source_id, date_str, saved_fname = info
         trade_date = datetime.strptime(date_str, "%Y%m%d").date()
-        dest       = date_dir(trade_date) / saved_fname
+        blob       = gcs_blob_name(trade_date, saved_fname)
         status     = _db_status(saved_fname)
 
         if status == FileStatus.SYNCED:
             blocked.append(src.name)
             continue
 
-        if dest.exists() and status == FileStatus.DOWNLOADED and not force:
+        if gcs_blob_exists(blob) and status == FileStatus.DOWNLOADED and not force:
             can_force.append(src.name)
             continue
 

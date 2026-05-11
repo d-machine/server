@@ -17,7 +17,6 @@ import logging
 import os
 import zipfile
 from datetime import date, datetime
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -25,11 +24,9 @@ import requests
 from sqlalchemy import text
 
 from app.database import engine
+from app.cron.bhavcopy.common import gcs_blob_name, upload_df_to_gcs, GCS_BUCKET
 
 logger = logging.getLogger(__name__)
-
-DATA_DIR     = Path(os.getenv("DATA_PATH", "data"))
-BHAVCOPY_DIR = DATA_DIR / "bhavcopy"
 
 _NSE_HEADERS = {
     "sec-ch-ua-platform": '"Android"',
@@ -60,12 +57,6 @@ _BSE_HEADERS = {
                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 "
                   "Mobile Safari/537.36 Edg/147.0.0.0",
 }
-
-
-def _date_dir(trade_date: date) -> Path:
-    d = BHAVCOPY_DIR / trade_date.isoformat()
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 def _file_name(source: str, trade_date: date) -> str:
@@ -113,7 +104,7 @@ def _read_csv_or_zip(content: bytes) -> pd.DataFrame:
 
 # ── NSE Equity ────────────────────────────────────────────────────────────────
 
-def download_nse_eq(trade_date: date, force: bool = False) -> Optional[Path]:
+def download_nse_eq(trade_date: date, force: bool = False) -> Optional[bool]:
     """
     Download NSE CM bhavcopy from nsearchives direct CSV.
 
@@ -124,11 +115,11 @@ def download_nse_eq(trade_date: date, force: bool = False) -> Optional[Path]:
     File may be served as plain CSV or zip — handled transparently.
     """
     fname = _file_name("NSE_EQ", trade_date)
-    dest  = _date_dir(trade_date) / fname
+    blob  = gcs_blob_name(trade_date, fname)
 
     if not force and _already_downloaded(fname):
         logger.info(f"[NSE_EQ] Already downloaded — skipping")
-        return dest if dest.exists() else None
+        return True
 
     date_str = trade_date.strftime("%Y%m%d")
     url = (f"https://nsearchives.nseindia.com/content/cm/"
@@ -143,10 +134,10 @@ def download_nse_eq(trade_date: date, force: bool = False) -> Optional[Path]:
 
         if df.empty:
             raise ValueError("Empty NSE EQ CSV")
-        df.to_csv(dest, index=False)
+        upload_df_to_gcs(df, blob)
         _record_status(fname, trade_date, "NSE_EQ", "downloaded")
-        logger.info(f"[NSE_EQ] Saved {len(df)} rows -> {dest}")
-        return dest
+        logger.info(f"[NSE_EQ] Uploaded {len(df)} rows -> gs://{GCS_BUCKET}/{blob}")
+        return True
     except Exception as exc:
         logger.error(f"[NSE_EQ] Failed: {exc}", exc_info=True)
         _record_status(fname, trade_date, "NSE_EQ", "failed", str(exc))
@@ -155,14 +146,14 @@ def download_nse_eq(trade_date: date, force: bool = False) -> Optional[Path]:
 
 # ── NSE F&O ───────────────────────────────────────────────────────────────────
 
-def download_nse_fo(trade_date: date, force: bool = False) -> Optional[Path]:
-    """Download NSE F&O bhavcopy zip from nsearchives and save the CSV inside."""
+def download_nse_fo(trade_date: date, force: bool = False) -> Optional[bool]:
+    """Download NSE F&O bhavcopy zip from nsearchives and upload the CSV inside."""
     fname = _file_name("NSE_FO", trade_date)
-    dest  = _date_dir(trade_date) / fname
+    blob  = gcs_blob_name(trade_date, fname)
 
     if not force and _already_downloaded(fname):
         logger.info(f"[NSE_FO] Already downloaded — skipping")
-        return dest if dest.exists() else None
+        return True
 
     date_str = trade_date.strftime("%Y%m%d")
     url = (f"https://nsearchives.nseindia.com/content/fo/"
@@ -177,10 +168,10 @@ def download_nse_fo(trade_date: date, force: bool = False) -> Optional[Path]:
 
         if df.empty:
             raise ValueError("Empty F&O CSV")
-        df.to_csv(dest, index=False)
+        upload_df_to_gcs(df, blob)
         _record_status(fname, trade_date, "NSE_FO", "downloaded")
-        logger.info(f"[NSE_FO] Saved {len(df)} rows -> {dest}")
-        return dest
+        logger.info(f"[NSE_FO] Uploaded {len(df)} rows -> gs://{GCS_BUCKET}/{blob}")
+        return True
     except Exception as exc:
         logger.error(f"[NSE_FO] Failed: {exc}", exc_info=True)
         _record_status(fname, trade_date, "NSE_FO", "failed", str(exc))
@@ -189,15 +180,15 @@ def download_nse_fo(trade_date: date, force: bool = False) -> Optional[Path]:
 
 # ── BSE Equity ────────────────────────────────────────────────────────────────
 
-def download_bse_eq(trade_date: date, force: bool = False) -> Optional[Path]:
+def download_bse_eq(trade_date: date, force: bool = False) -> Optional[bool]:
     """Download BSE equity bhavcopy (direct CSV/zip URL)."""
     fname    = _file_name("BSE_EQ", trade_date)
-    dest     = _date_dir(trade_date) / fname
+    blob     = gcs_blob_name(trade_date, fname)
     date_str = trade_date.strftime("%Y%m%d")
 
     if not force and _already_downloaded(fname):
         logger.info(f"[BSE_EQ] Already downloaded — skipping")
-        return dest if dest.exists() else None
+        return True
 
     url = (f"https://www.bseindia.com/download/BhavCopy/Equity/"
            f"BhavCopy_BSE_CM_0_0_0_{date_str}_F_0000.CSV")
@@ -211,10 +202,10 @@ def download_bse_eq(trade_date: date, force: bool = False) -> Optional[Path]:
 
         if df.empty:
             raise ValueError("Empty BSE EQ response")
-        df.to_csv(dest, index=False)
+        upload_df_to_gcs(df, blob)
         _record_status(fname, trade_date, "BSE_EQ", "downloaded")
-        logger.info(f"[BSE_EQ] Saved {len(df)} rows -> {dest}")
-        return dest
+        logger.info(f"[BSE_EQ] Uploaded {len(df)} rows -> gs://{GCS_BUCKET}/{blob}")
+        return True
     except Exception as exc:
         logger.error(f"[BSE_EQ] Failed: {exc}", exc_info=True)
         _record_status(fname, trade_date, "BSE_EQ", "failed", str(exc))
@@ -223,15 +214,15 @@ def download_bse_eq(trade_date: date, force: bool = False) -> Optional[Path]:
 
 # ── BSE F&O ───────────────────────────────────────────────────────────────────
 
-def download_bse_fo(trade_date: date, force: bool = False) -> Optional[Path]:
+def download_bse_fo(trade_date: date, force: bool = False) -> Optional[bool]:
     """Download BSE F&O bhavcopy (direct CSV/zip URL)."""
     fname    = _file_name("BSE_FO", trade_date)
-    dest     = _date_dir(trade_date) / fname
+    blob     = gcs_blob_name(trade_date, fname)
     date_str = trade_date.strftime("%Y%m%d")
 
     if not force and _already_downloaded(fname):
         logger.info(f"[BSE_FO] Already downloaded — skipping")
-        return dest if dest.exists() else None
+        return True
 
     url = (f"https://www.bseindia.com/download/BhavCopy/Derivative/"
            f"BhavCopy_BSE_FO_0_0_0_{date_str}_F_0000.CSV")
@@ -245,10 +236,10 @@ def download_bse_fo(trade_date: date, force: bool = False) -> Optional[Path]:
 
         if df.empty:
             raise ValueError("Empty BSE FO response")
-        df.to_csv(dest, index=False)
+        upload_df_to_gcs(df, blob)
         _record_status(fname, trade_date, "BSE_FO", "downloaded")
-        logger.info(f"[BSE_FO] Saved {len(df)} rows -> {dest}")
-        return dest
+        logger.info(f"[BSE_FO] Uploaded {len(df)} rows -> gs://{GCS_BUCKET}/{blob}")
+        return True
     except Exception as exc:
         logger.error(f"[BSE_FO] Failed: {exc}", exc_info=True)
         _record_status(fname, trade_date, "BSE_FO", "failed", str(exc))

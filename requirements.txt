@@ -28,3 +28,4 @@ uvloop==0.22.1
 watchfiles==1.1.1
 websockets==16.0
 pytz==2024.2
+google-cloud-storage==2.19.0

@@ -22,7 +22,7 @@ import requests
 
 from app.cron.bhavcopy.constants import FileStatus
 from app.cron.bhavcopy.common import (
-    BHAVCOPY_DIR, date_dir, record_status, already_downloaded,
+    GCS_BUCKET, gcs_blob_name, upload_df_to_gcs, record_status, already_downloaded,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ def download(trade_date, force: bool = False, instrument: str = "ALL") -> bool:
         raise ValueError(f"instrument must be one of {INSTRUMENTS}")
 
     fname = _fname(trade_date)
-    dest  = date_dir(trade_date) / fname
+    blob  = gcs_blob_name(trade_date, fname)
 
     if not force and already_downloaded(fname):
         logger.info("[%s] %s already downloaded — skipping", SOURCE, trade_date)
@@ -110,9 +110,9 @@ def download(trade_date, force: bool = False, instrument: str = "ALL") -> bool:
         if df.empty:
             raise ValueError("Empty DataFrame after parsing response")
 
-        df.to_csv(dest, index=False)
+        upload_df_to_gcs(df, blob)
         record_status(fname, trade_date, SOURCE, FileStatus.DOWNLOADED)
-        logger.info("[%s] Saved %d rows -> %s", SOURCE, len(df), dest)
+        logger.info("[%s] Uploaded %d rows -> gs://%s/%s", SOURCE, len(df), GCS_BUCKET, blob)
         return True
 
     except Exception as exc:

@@ -5,7 +5,10 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data        # SQLite DB persisted outside container
+      - ./data:/app/data          # SQLite DB + bhavcopy files
+      - ./inbox:/app/inbox        # Drop files here for manual registration
+      - ./errors:/app/errors      # Download error logs dumped here
+      - ./scripts:/app/scripts    # Utility scripts (reset_db, scan_bhavcopy_files, etc.)
     environment:
       - DB_PATH=data/portfolio_server.db
     restart: unless-stopped

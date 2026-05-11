@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -13,7 +13,8 @@ router = APIRouter()
 
 @router.get("/latest")
 def latest_prices(
-    isins: List[str] = Query(..., description="List of ISINs the client holds"),
+    instrument_ids: List[int] = Query(None, description="List of server instrument_ids"),
+    isins: List[str] = Query(None, description="[Legacy] List of ISINs the client holds"),
 ):
     """
     Return today's latest price (OHLC) for each ISIN.
@@ -23,7 +24,15 @@ def latest_prices(
     cached = cache.get_prices(today)
 
     if cached is not None:
-        result = {isin: cached.get(isin) for isin in isins if isin in cached}
+        result = {}
+        if instrument_ids:
+            # Preferred path: fetch by instrument_ids
+            result.update({iid: cached.get(iid) for iid in instrument_ids if iid in cached})
+            
+        if isins:
+            # Legacy path: cache no longer uses ISINs as keys, returning empty for these
+            pass
+            
         return {"date": today.isoformat(), "prices": result}
 
     return {"date": today.isoformat(), "prices": {}, "cache_miss": True}
@@ -31,7 +40,14 @@ def latest_prices(
 
 @router.get("/sync")
 def sync_prices(
-    isins: List[str] = Query(..., description="List of ISINs the client holds"),
+    instrument_ids: List[int] = Query(
+        None,
+        description="List of server instrument_ids to fetch prices for (preferred).",
+    ),
+    isins: List[str] = Query(
+        None,
+        description="[Legacy] List of ISINs. Use instrument_ids instead.",
+    ),
     since_date: Optional[str] = Query(
         None,
         description="[Legacy] Return EOD prices after this YYYY-MM-DD date.",
@@ -39,7 +55,6 @@ def sync_prices(
     since_datetime: Optional[str] = Query(
         None,
         description="Return latest_prices rows where last_synced_at > this ISO datetime. "
-                    "Use this for intraday incremental sync. "
                     "Format: YYYY-MM-DDTHH:MM:SS  e.g. 2026-04-16T10:30:00",
     ),
     db: Session = Depends(get_db),
@@ -47,30 +62,58 @@ def sync_prices(
     """
     Incremental price sync.
 
-    Two modes:
-    - **since_datetime** (preferred): returns latest_prices rows (OHLC + last_synced_at)
-      for the client's ISINs that changed since the given datetime.  Used for
-      intraday portfolio valuation.
-    - **since_date** (legacy / historical): returns all daily_prices rows after
-      the given date.  Used for charting / capital-gains history.
+    Preferred mode — **instrument_ids**: query latest_prices directly by
+    instrument_id. Returns prices keyed by instrument_id (no join needed).
+
+    Legacy mode — **isins**: retained for backward compatibility.
+
+    In both modes, pass since_datetime for incremental sync (only rows that
+    changed since that timestamp are returned).
 
     Typical client flow:
-      1. On first launch: call with no `since_datetime` to get all latest prices.
-      2. Store the `synced_at` timestamp returned in the response.
-      3. On subsequent calls: pass that timestamp as `since_datetime`.
+      1. On first launch: call with instrument_ids, no since_datetime.
+      2. Store the synced_at timestamp returned in the response.
+      3. On subsequent calls: pass that timestamp as since_datetime.
     """
+    synced_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+
+    # ── Instrument-ID path (new preferred) ───────────────────────────────────
+    if instrument_ids:
+        placeholders = ",".join(f":id_{i}" for i in range(len(instrument_ids)))
+        params: dict = {f"id_{i}": iid for i, iid in enumerate(instrument_ids)}
+
+        date_filter = ""
+        if since_datetime is not None:
+            params["since_dt"] = since_datetime
+            date_filter = "AND lp.last_synced_at > :since_dt"
+
+        rows = db.execute(
+            text(f"""
+                SELECT
+                    lp.instrument_id,
+                    lp.price_date,
+                    lp.open_price_paise,
+                    lp.high_price_paise,
+                    lp.low_price_paise,
+                    lp.close_price_paise,
+                    lp.last_synced_at
+                FROM latest_prices lp
+                WHERE lp.instrument_id IN ({placeholders})
+                {date_filter}
+                ORDER BY lp.last_synced_at DESC
+            """),
+            params,
+        ).mappings().all()
+
+        return {"prices": [dict(r) for r in rows], "synced_at": synced_at}
+
+    # ── Legacy ISIN path ──────────────────────────────────────────────────────
     if not isins:
         return {"prices": [], "synced_at": None}
 
     named_placeholders = ",".join(f":isin_{i}" for i in range(len(isins)))
-    params: dict = {f"isin_{i}": isin for i, isin in enumerate(isins)}
+    params = {f"isin_{i}": isin for i, isin in enumerate(isins)}
 
-    from datetime import datetime
-    synced_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-
-    # ── Latest-price sync (default + incremental) ─────────────────────────────
-    # No since_datetime  → return all current latest_prices for these ISINs.
-    # With since_datetime → return only rows that changed since that timestamp.
     if since_date is None:
         date_filter = ""
         if since_datetime is not None:
@@ -80,7 +123,7 @@ def sync_prices(
         rows = db.execute(
             text(f"""
                 SELECT
-                    i.isin,
+                    ie.isin,
                     lp.price_date,
                     lp.open_price_paise,
                     lp.high_price_paise,
@@ -88,8 +131,8 @@ def sync_prices(
                     lp.close_price_paise,
                     lp.last_synced_at
                 FROM latest_prices lp
-                JOIN instruments i ON lp.instrument_id = i.instrument_id
-                WHERE i.isin IN ({named_placeholders})
+                JOIN instrument_equity ie ON ie.instrument_id = lp.instrument_id
+                WHERE ie.isin IN ({named_placeholders})
                 {date_filter}
                 ORDER BY lp.last_synced_at DESC
             """),
@@ -103,17 +146,17 @@ def sync_prices(
     rows = db.execute(
         text(f"""
             SELECT
-                i.isin,
-                dp.trade_date  AS price_date,
-                dp.open_price_paise,
-                dp.high_price_paise,
-                dp.low_price_paise,
-                dp.close_price_paise
-            FROM daily_prices dp
-            JOIN instruments i ON dp.instrument_id = i.instrument_id
-            WHERE i.isin IN ({named_placeholders})
-              AND dp.trade_date > :since_date
-            ORDER BY i.isin, dp.trade_date
+                ie.isin,
+                eod.trade_date  AS price_date,
+                eod.open_price_paise,
+                eod.high_price_paise,
+                eod.low_price_paise,
+                eod.close_price_paise
+            FROM equity_eod eod
+            JOIN instrument_equity ie ON ie.instrument_id = eod.instrument_id
+            WHERE ie.isin IN ({named_placeholders})
+              AND eod.trade_date > :since_date
+            ORDER BY ie.isin, eod.trade_date
         """),
         params,
     ).mappings().all()
@@ -129,10 +172,10 @@ def trading_calendar(
     """Return market holidays for a given year."""
     rows = db.execute(
         text("""
-            SELECT holiday_date, description
+            SELECT trade_date, description
             FROM trading_calendar
-            WHERE holiday_date LIKE :year_prefix
-            ORDER BY holiday_date
+            WHERE trade_date LIKE :year_prefix
+            ORDER BY trade_date
         """),
         {"year_prefix": f"{year}-%"},
     ).mappings().all()

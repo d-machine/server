@@ -7,7 +7,6 @@ fastapi==0.135.2
 h11==0.16.0
 httptools==0.7.1
 idna==3.11
-jugaad-data==0.33.1
 lxml==6.0.3
 MarkupSafe==3.0.3
 numpy==2.4.4

@@ -39,3 +39,10 @@ logs/
 
 # Docker
 *.override.yml
+
+# errors
+errors/*
+
+# inbox
+inbox/
+

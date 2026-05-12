@@ -21,7 +21,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.cron.bhavcopy import nse_eq, nse_fo, bse_eq, bse_fo, amfi, mcx
+from app.cron.bhavcopy import nse_eq, nse_fo, bse_eq, bse_fo, amfi, mcx2
 from app.cron.bhavcopy.common import gcs_blob_name, gcs_blob_exists
 from app.cron.bhavcopy.constants import FileStatus
 from app.cron.bhavcopy.register_file import register as register_file
@@ -50,7 +50,7 @@ SOURCES = {
     "BSE_EQ":   bse_eq.download,
     "BSE_FO":   bse_fo.download,
     "AMFI_NAV": amfi.download,
-    "MCX":      mcx.download,
+    "MCX":      mcx2.download,
 }
 
 MIN_SLEEP_SECONDS = 30

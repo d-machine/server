@@ -5,12 +5,15 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data          # SQLite DB + bhavcopy files
+      - ./data:/app/data          # SQLite DB
       - ./inbox:/app/inbox        # Drop files here for manual registration
       - ./errors:/app/errors      # Download error logs dumped here
+      - ./logs:/app/logs          # App logs
       - ./scripts:/app/scripts    # Utility scripts (reset_db, scan_bhavcopy_files, etc.)
     environment:
-      - DB_PATH=data/portfolio_server.db
+      - DB_PATH=/app/data/portfolio_server.db
+      - ERRORS_PATH=/app/errors
+      - LOGS_PATH=/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",

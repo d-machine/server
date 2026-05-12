@@ -75,13 +75,17 @@ def scan(start: date, end: date, dry_run: bool = False):
                 "td":     trade_date.isoformat(),
                 "src":    source,
                 "status": int(status),
-                "error":  None if found else "File not found on disk",
+                "error":  None if found else "File not found in GCS",
             })
             if found:
                 downloaded += 1
             else:
                 failed += 1
             total += 1
+
+        if total % 60 == 0:
+            print(f"  {trade_date}  checked {total} slots  ({downloaded} found, {failed} missing)",
+                  flush=True)
 
     print(f"Scanned {total} file slots ({downloaded} found, {failed} missing) "
           f"for {start} → {end}")

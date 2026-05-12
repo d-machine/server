@@ -235,6 +235,42 @@ def bulk_resolve_fo_bse(fin_ids: list[int]) -> dict[int, int]:
     return {r[0]: r[1] for r in rows}
 
 
+def bulk_resolve_underlying_symbols(symbols: list[str]) -> dict[str, int]:
+    """2 SELECTs (equity + index): symbol -> underlying instrument_id."""
+    if not symbols:
+        return {}
+    ph = ",".join(f":s{n}" for n in range(len(symbols)))
+    params = {f"s{n}": s for n, s in enumerate(symbols)}
+    result: dict[str, int] = {}
+    with engine.connect() as conn:
+        for table, col in [("instrument_equity", "nse_symbol"), ("instrument_index", "symbol")]:
+            for r in conn.execute(
+                text(f"SELECT {col}, instrument_id FROM {table} WHERE {col} IN ({ph})"),
+                params,
+            ).fetchall():
+                if r[0] not in result:
+                    result[r[0]] = r[1]
+    return result
+
+
+def bulk_resolve_fo_contracts_by_underlying(underlying_ids: list[int]) -> dict[tuple, int]:
+    """ONE SELECT: (underlying_id, expiry_date, strike_price_paise, option_type) -> instrument_id."""
+    if not underlying_ids:
+        return {}
+    ph = ",".join(f":u{n}" for n in range(len(underlying_ids)))
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(f"""
+                SELECT instrument_id, underlying_instrument_id, expiry_date,
+                       strike_price_paise, option_type
+                FROM instrument_derivatives
+                WHERE underlying_instrument_id IN ({ph})
+            """),
+            {f"u{n}": u for n, u in enumerate(underlying_ids)},
+        ).fetchall()
+    return {(r[1], r[2], int(r[3]), r[4]): r[0] for r in rows}
+
+
 def bulk_resolve_mcx(keys: list[tuple]) -> dict[tuple, int]:
     """
     ONE SELECT for all (mcx_symbol, instrument_type, expiry_date, strike_price_paise, option_type) tuples.

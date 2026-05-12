@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from app.database import engine
 from app.cron.bhavcopy.sync.base import (
-    get_pending_files, load_file_df, mark_synced, mark_failed,
+    get_pending_files, load_file_chunks, mark_synced, mark_failed,
     to_paise, to_int, to_float,
     bulk_resolve_fo_nse, bulk_create_fo,
     get_fo_instrument_by_contract,
@@ -63,10 +63,17 @@ def run(force: bool = False) -> dict:
 
 
 def _process_file(file_name: str, trade_date_str: str) -> int:
-    df = load_file_df(trade_date_str, file_name, dtype=str)
-    df.columns = df.columns.str.strip()
+    total = 0
+    for i, chunk in enumerate(load_file_chunks(trade_date_str, file_name), 1):
+        chunk.columns = chunk.columns.str.strip()
+        rows = _process_chunk(chunk, trade_date_str, file_name)
+        logger.debug("[%s] %s chunk %d — %d rows", SOURCE, file_name, i, rows)
+        total += rows
+    return total
 
-    # -- Pass 1: parse all valid rows, collect unique fin_ids ------------------
+
+def _process_chunk(df: pd.DataFrame, trade_date_str: str, file_name: str) -> int:
+    # -- Pass 1: parse valid rows, collect unique fin_ids ----------------------
     parsed_rows = []
     skipped     = 0
 
@@ -82,18 +89,15 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
     if not parsed_rows:
         return 0
 
-    # -- Pass 2: ONE SELECT for all unique fin_ids -----------------------------
+    # -- Pass 2: ONE SELECT for all unique fin_ids in this chunk ---------------
     unique_fin_ids = list({fid for fid, _ in parsed_rows})
     id_map         = bulk_resolve_fo_nse(unique_fin_ids)
 
-    # -- Pass 3: resolve missing contracts, bulk-create in ONE transaction -----
+    # -- Pass 3: resolve missing contracts, bulk-create ------------------------
     missing_ids = [fid for fid in unique_fin_ids if fid not in id_map]
     if missing_ids:
-        # Separate into: contracts that link to an existing record vs truly new
         linked, new_specs = _resolve_missing(missing_ids, parsed_rows)
-        # Inject already-linked ids directly
         id_map.update(linked)
-        # Bulk-create all truly new contracts in a single transaction
         if new_specs:
             new_ids = bulk_create_fo(new_specs, "nse_fininstrmid")
             id_map.update(new_ids)

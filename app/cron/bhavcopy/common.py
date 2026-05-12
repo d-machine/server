@@ -84,6 +84,12 @@ def download_bytes_from_gcs(blob_name: str) -> bytes:
     return _bucket().blob(blob_name).download_as_bytes()
 
 
+def download_df_chunks_from_gcs(blob_name: str, chunksize: int = 5_000):
+    """Download blob once, return a chunked CSV reader to avoid large DataFrames."""
+    data = _bucket().blob(blob_name).download_as_bytes()
+    return pd.read_csv(io.BytesIO(data), dtype=str, chunksize=chunksize)
+
+
 def record_status(fname: str, trade_date: date, source: str,
                   status: FileStatus, error: Optional[str] = None):
     with engine.begin() as conn:

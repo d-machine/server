@@ -20,7 +20,7 @@ from sqlalchemy import text
 
 from app.database import engine
 from app.cron.bhavcopy.sync.base import (
-    get_pending_files, load_file_df, mark_synced, mark_failed,
+    get_pending_files, load_file_chunks, mark_synced, mark_failed,
     to_int, to_float,
     bulk_resolve_mcx, bulk_create_mcx,
 )
@@ -58,10 +58,17 @@ def run(force: bool = False) -> dict:
 
 
 def _process_file(file_name: str, trade_date_str: str) -> int:
-    df = load_file_df(trade_date_str, file_name, dtype=str)
-    df.columns = df.columns.str.strip()
+    total = 0
+    for i, chunk in enumerate(load_file_chunks(trade_date_str, file_name), 1):
+        chunk.columns = chunk.columns.str.strip()
+        rows = _process_chunk(chunk, trade_date_str, file_name)
+        logger.debug("[%s] %s chunk %d — %d rows", SOURCE, file_name, i, rows)
+        total += rows
+    return total
 
-    # -- Pass 1: parse all valid rows, collect unique keys ---------------------
+
+def _process_chunk(df: pd.DataFrame, trade_date_str: str, file_name: str) -> int:
+    # -- Pass 1: parse valid rows, collect unique keys -------------------------
     parsed_rows = []
     skipped     = 0
 
@@ -107,14 +114,13 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
     if not parsed_rows:
         return 0
 
-    # -- Pass 2: ONE SELECT for all unique keys --------------------------------
+    # -- Pass 2: ONE SELECT for all unique keys in this chunk ------------------
     unique_keys = list({k for k, _, _, _ in parsed_rows})
     id_map      = bulk_resolve_mcx(unique_keys)
 
-    # -- Pass 3: bulk-create all missing instruments in ONE transaction --------
+    # -- Pass 3: bulk-create missing instruments -------------------------------
     missing_keys = [k for k in unique_keys if k not in id_map]
     if missing_keys:
-        # Build one representative row per missing key
         key_to_row: dict[tuple, object] = {}
         for key, row, _, _ in parsed_rows:
             if key in missing_keys and key not in key_to_row:

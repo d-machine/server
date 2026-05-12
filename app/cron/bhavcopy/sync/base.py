@@ -13,6 +13,7 @@ from sqlalchemy import text
 from app.database import engine
 from app.cron.bhavcopy.common import (
     gcs_blob_name, download_df_from_gcs, download_bytes_from_gcs,
+    download_df_chunks_from_gcs,
 )
 from app.cron.bhavcopy.constants import FileStatus
 
@@ -78,6 +79,13 @@ def load_file_bytes(trade_date_str: str, file_name: str) -> bytes:
     trade_date = datetime.strptime(trade_date_str, "%Y-%m-%d").date()
     blob = gcs_blob_name(trade_date, file_name)
     return download_bytes_from_gcs(blob)
+
+
+def load_file_chunks(trade_date_str: str, file_name: str, chunksize: int = 5_000):
+    """Return a chunked CSV reader — each iteration yields one DataFrame slice."""
+    trade_date = datetime.strptime(trade_date_str, "%Y-%m-%d").date()
+    blob = gcs_blob_name(trade_date, file_name)
+    return download_df_chunks_from_gcs(blob, chunksize=chunksize)
 
 
 # -- Type coercion ------------------------------------------------------------

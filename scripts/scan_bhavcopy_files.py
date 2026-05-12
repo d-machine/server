@@ -90,14 +90,19 @@ def scan(start: date, end: date, dry_run: bool = False):
         print("Dry run — no DB writes.")
         return
 
-    # Bulk upsert into bhavcopy_files
+    # Bulk upsert into bhavcopy_files.
+    # Never downgrade a SYNCED file — only update if not already synced.
     with engine.begin() as conn:
         conn.execute(text("""
             INSERT INTO bhavcopy_files (file_name, trade_date, source, status, error, updated_at)
             VALUES (:fn, :td, :src, :status, :error, datetime('now'))
             ON CONFLICT(file_name) DO UPDATE SET
-                status   = excluded.status,
-                error    = excluded.error,
+                status     = CASE WHEN bhavcopy_files.status = 3
+                                  THEN bhavcopy_files.status
+                                  ELSE excluded.status END,
+                error      = CASE WHEN bhavcopy_files.status = 3
+                                  THEN bhavcopy_files.error
+                                  ELSE excluded.error END,
                 updated_at = datetime('now')
         """), rows)
 

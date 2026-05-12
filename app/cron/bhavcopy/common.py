@@ -75,9 +75,13 @@ def upload_df_to_gcs(df: pd.DataFrame, blob_name: str) -> None:
     _bucket().blob(blob_name).upload_from_string(buf.getvalue(), content_type="text/csv")
 
 
-def download_df_from_gcs(blob_name: str) -> pd.DataFrame:
+def download_df_from_gcs(blob_name: str, **read_csv_kwargs) -> pd.DataFrame:
     data = _bucket().blob(blob_name).download_as_bytes()
-    return pd.read_csv(io.BytesIO(data))
+    return pd.read_csv(io.BytesIO(data), **read_csv_kwargs)
+
+
+def download_bytes_from_gcs(blob_name: str) -> bytes:
+    return _bucket().blob(blob_name).download_as_bytes()
 
 
 def record_status(fname: str, trade_date: date, source: str,

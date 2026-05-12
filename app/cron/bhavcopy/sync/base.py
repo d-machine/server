@@ -5,14 +5,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 from sqlalchemy import text
 
 from app.database import engine
-from app.cron.bhavcopy.common import BHAVCOPY_DIR
+from app.cron.bhavcopy.common import (
+    gcs_blob_name, download_df_from_gcs, download_bytes_from_gcs,
+)
 from app.cron.bhavcopy.constants import FileStatus
 
 logger = logging.getLogger(__name__)
@@ -67,9 +68,16 @@ def mark_failed(file_name: str, error: str):
         """), {"fn": file_name, "err": str(error)[:2000], "status": int(FileStatus.SYNC_FAILED)})
 
 
-def resolve_file_path(trade_date_str: str, file_name: str) -> Path:
+def load_file_df(trade_date_str: str, file_name: str, **read_csv_kwargs) -> pd.DataFrame:
     trade_date = datetime.strptime(trade_date_str, "%Y-%m-%d").date()
-    return BHAVCOPY_DIR / trade_date.isoformat() / file_name
+    blob = gcs_blob_name(trade_date, file_name)
+    return download_df_from_gcs(blob, **read_csv_kwargs)
+
+
+def load_file_bytes(trade_date_str: str, file_name: str) -> bytes:
+    trade_date = datetime.strptime(trade_date_str, "%Y-%m-%d").date()
+    blob = gcs_blob_name(trade_date, file_name)
+    return download_bytes_from_gcs(blob)
 
 
 # -- Type coercion ------------------------------------------------------------

@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from app.database import engine
 from app.cron.bhavcopy.sync.base import (
-    get_pending_files, resolve_file_path, mark_synced, mark_failed,
+    get_pending_files, load_file_bytes, mark_synced, mark_failed,
     to_paise,
     bulk_resolve_amfi, bulk_create_mf,
 )
@@ -53,10 +53,8 @@ def run(force: bool = False) -> dict:
 
 
 def _process_file(file_name: str, trade_date_str: str) -> int:
-    path = resolve_file_path(trade_date_str, file_name)
-
-    with open(path, encoding="utf-8", errors="replace") as fh:
-        lines = fh.readlines()
+    raw   = load_file_bytes(trade_date_str, file_name)
+    lines = raw.decode("utf-8", errors="replace").splitlines(keepends=True)
     if not lines:
         return 0
 

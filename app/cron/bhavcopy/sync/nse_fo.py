@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from app.database import engine
 from app.cron.bhavcopy.sync.base import (
-    get_pending_files, resolve_file_path, mark_synced, mark_failed,
+    get_pending_files, load_file_df, mark_synced, mark_failed,
     to_paise, to_int, to_float,
     bulk_resolve_fo_nse, bulk_create_fo,
     get_fo_instrument_by_contract,
@@ -63,8 +63,7 @@ def run(force: bool = False) -> dict:
 
 
 def _process_file(file_name: str, trade_date_str: str) -> int:
-    path = resolve_file_path(trade_date_str, file_name)
-    df   = pd.read_csv(path, dtype=str)
+    df = load_file_df(trade_date_str, file_name, dtype=str)
     df.columns = df.columns.str.strip()
 
     # -- Pass 1: parse all valid rows, collect unique fin_ids ------------------

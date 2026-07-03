@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Account — Portfolio Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-gray-50">
+
+  <nav class="bg-white border-b">
+    <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
+      <a href="index.html" class="font-bold text-lg">Portfolio Tracker</a>
+      <div class="flex items-center gap-4">
+        <span id="nav-email" class="text-sm text-gray-500"></span>
+        <button onclick="logout()" class="text-sm text-red-500 hover:text-red-700">Logout</button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="max-w-2xl mx-auto px-4 py-12">
+    <h1 class="text-2xl font-bold mb-8">My Account</h1>
+
+    <!-- Subscription Status -->
+    <div class="bg-white rounded-2xl shadow p-6 mb-6">
+      <h2 class="font-semibold text-lg mb-4">Subscription</h2>
+      <div id="sub-loading" class="text-gray-400 text-sm">Loading…</div>
+      <div id="sub-none" class="hidden">
+        <p class="text-gray-600 mb-4">You don't have an active subscription.</p>
+        <a href="subscribe.html" class="bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-blue-700">Subscribe Now</a>
+      </div>
+      <div id="sub-info" class="hidden">
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span id="sub-status-badge" class="text-xs font-medium px-2.5 py-0.5 rounded-full"></span>
+              <span id="sub-plan" class="text-sm font-medium text-gray-700"></span>
+            </div>
+            <p id="sub-expires" class="text-sm text-gray-500"></p>
+            <p id="sub-submitted" class="text-xs text-gray-400 mt-1"></p>
+          </div>
+          <a href="subscribe.html" id="renew-btn" class="hidden text-sm bg-blue-600 text-white rounded-lg px-3 py-1.5 hover:bg-blue-700">Renew</a>
+        </div>
+
+        <!-- Decline notice -->
+        <div id="decline-notice" class="hidden bg-amber-50 border border-amber-200 rounded-xl p-4 mt-2">
+          <p class="text-sm font-medium text-amber-800 mb-1">Action required</p>
+          <p id="decline-reason" class="text-sm text-amber-700 mb-3"></p>
+          <p class="text-xs text-amber-600 mb-3">Upload a corrected payment screenshot, or reply to the decline email with the correct screenshot.</p>
+
+          <div id="replace-success" class="hidden bg-green-50 text-green-700 text-xs rounded px-3 py-2 mb-3"></div>
+          <div id="replace-error" class="hidden bg-red-50 text-red-700 text-xs rounded px-3 py-2 mb-3"></div>
+
+          <label class="block">
+            <input type="file" id="replace-file" accept="image/*" class="hidden">
+            <span class="text-xs text-blue-600 hover:underline cursor-pointer" onclick="document.getElementById('replace-file').click()">
+              Choose replacement screenshot
+            </span>
+          </label>
+          <div id="replace-file-name" class="text-xs text-gray-500 mt-1"></div>
+          <button id="replace-btn" class="mt-2 text-xs bg-amber-600 text-white rounded px-3 py-1.5 hover:bg-amber-700 disabled:opacity-40" disabled>
+            Upload & Resubmit
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Account info -->
+    <div class="bg-white rounded-2xl shadow p-6">
+      <h2 class="font-semibold text-lg mb-4">Account</h2>
+      <div class="text-sm space-y-2">
+        <div class="flex justify-between"><span class="text-gray-500">Email</span><span id="acc-email" class="font-medium"></span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Name</span><span id="acc-name" class="font-medium"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const token = sessionStorage.getItem('access_token');
+    if (!token) window.location.href = 'auth.html';
+
+    document.getElementById('nav-email').textContent = sessionStorage.getItem('email') || '';
+
+    const STATUS_STYLES = {
+      ACTIVE:           'bg-green-100 text-green-700',
+      PENDING_APPROVAL: 'bg-yellow-100 text-yellow-700',
+      DECLINED:         'bg-red-100 text-red-700',
+      CANCELLED:        'bg-gray-100 text-gray-500',
+      EXPIRED:          'bg-gray-100 text-gray-500',
+    };
+    const PLAN_LABELS = { MONTH: 'Monthly', QUARTER: 'Quarterly', SEMESTER: 'Half-Yearly', YEAR: 'Yearly' };
+
+    async function load() {
+      try {
+        const [meRes, subRes] = await Promise.all([
+          fetch('/auth/me', { headers: { Authorization: `Bearer ${token}` } }),
+          fetch('/subscriptions/status', { headers: { Authorization: `Bearer ${token}` } }),
+        ]);
+        const me  = await meRes.json();
+        const sub = await subRes.json();
+
+        document.getElementById('acc-email').textContent = me.email;
+        document.getElementById('acc-name').textContent  = me.name;
+
+        document.getElementById('sub-loading').classList.add('hidden');
+
+        if (!sub.has_subscription) {
+          document.getElementById('sub-none').classList.remove('hidden');
+          return;
+        }
+
+        document.getElementById('sub-info').classList.remove('hidden');
+        const badge = document.getElementById('sub-status-badge');
+        badge.textContent = sub.status.replace('_', ' ');
+        badge.className   = `text-xs font-medium px-2.5 py-0.5 rounded-full ${STATUS_STYLES[sub.status] || ''}`;
+
+        document.getElementById('sub-plan').textContent = PLAN_LABELS[sub.plan] || sub.plan;
+
+        if (sub.expires_at) {
+          document.getElementById('sub-expires').textContent = `Expires: ${sub.expires_at.slice(0, 10)}`;
+        } else if (sub.status === 'PENDING_APPROVAL') {
+          document.getElementById('sub-expires').textContent = 'Awaiting admin verification';
+        }
+
+        if (sub.submitted_at) {
+          document.getElementById('sub-submitted').textContent = `Submitted: ${sub.submitted_at.slice(0, 10)}`;
+        }
+
+        if (sub.status === 'DECLINED') {
+          document.getElementById('decline-notice').classList.remove('hidden');
+          document.getElementById('decline-reason').textContent = sub.decline_reason || 'Screenshot was declined.';
+        }
+
+        if (['ACTIVE', 'EXPIRED', 'CANCELLED'].includes(sub.status)) {
+          document.getElementById('renew-btn').classList.remove('hidden');
+        }
+
+      } catch (err) {
+        document.getElementById('sub-loading').textContent = 'Failed to load. Please refresh.';
+      }
+    }
+    load();
+
+    // Replace screenshot
+    let replaceFile = null;
+    document.getElementById('replace-file').addEventListener('change', (e) => {
+      replaceFile = e.target.files[0];
+      if (replaceFile) {
+        document.getElementById('replace-file-name').textContent = replaceFile.name;
+        document.getElementById('replace-btn').disabled = false;
+      }
+    });
+
+    document.getElementById('replace-btn').addEventListener('click', async () => {
+      if (!replaceFile) return;
+      document.getElementById('replace-error').classList.add('hidden');
+      const btn = document.getElementById('replace-btn');
+      btn.disabled = true; btn.textContent = 'Uploading…';
+      const form = new FormData();
+      form.append('screenshot', replaceFile);
+      try {
+        const res = await fetch('/subscriptions/replace-screenshot', {
+          method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.detail); }
+        document.getElementById('replace-success').textContent = 'Screenshot uploaded. Re-verification in progress.';
+        document.getElementById('replace-success').classList.remove('hidden');
+        document.getElementById('decline-notice').querySelector('input').disabled = true;
+        btn.textContent = 'Submitted';
+      } catch (err) {
+        document.getElementById('replace-error').textContent = err.message;
+        document.getElementById('replace-error').classList.remove('hidden');
+        btn.disabled = false; btn.textContent = 'Upload & Resubmit';
+      }
+    });
+
+    function logout() {
+      const rt = sessionStorage.getItem('refresh_token');
+      if (rt) fetch('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: rt }) }).catch(() => {});
+      sessionStorage.clear();
+      window.location.href = 'auth.html';
+    }
+  </script>
+</body>
+</html>

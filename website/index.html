@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portfolio Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-900">
+
+  <!-- Nav -->
+  <nav class="bg-white border-b sticky top-0 z-10">
+    <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
+      <span class="font-bold text-lg">Portfolio Tracker</span>
+      <div class="flex gap-3">
+        <a href="auth.html" class="text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5">Login</a>
+        <a href="auth.html#register" class="text-sm bg-blue-600 text-white rounded-lg px-4 py-1.5 hover:bg-blue-700">Register</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="max-w-6xl mx-auto px-4 py-20 text-center">
+    <h1 class="text-4xl sm:text-5xl font-bold mb-4">Track your Indian portfolio,<br class="hidden sm:block"> all in one place.</h1>
+    <p class="text-lg text-gray-500 mb-8 max-w-xl mx-auto">
+      Offline-first desktop app for equity, mutual funds, F&amp;O, bonds, and more.
+      Live prices via secure server sync.
+    </p>
+    <div class="flex flex-col sm:flex-row gap-3 justify-center">
+      <a id="download-btn" href="#download" class="bg-blue-600 text-white rounded-xl px-8 py-3 text-base font-medium hover:bg-blue-700">
+        Download for Windows
+      </a>
+      <a href="auth.html#register" class="border border-gray-300 rounded-xl px-8 py-3 text-base font-medium hover:bg-gray-100">
+        Register Free
+      </a>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="max-w-6xl mx-auto px-4 pb-20 grid sm:grid-cols-3 gap-6">
+    <div class="bg-white rounded-2xl p-6 shadow-sm">
+      <div class="text-2xl mb-3">📊</div>
+      <h3 class="font-semibold mb-1">Complete Portfolio View</h3>
+      <p class="text-sm text-gray-500">Equity, MF, F&amp;O, bonds, PPF, NPS — all tracked with FIFO cost basis and capital gains.</p>
+    </div>
+    <div class="bg-white rounded-2xl p-6 shadow-sm">
+      <div class="text-2xl mb-3">🔒</div>
+      <h3 class="font-semibold mb-1">Fully Encrypted</h3>
+      <p class="text-sm text-gray-500">Your data stays on your device, encrypted with AES-256. No cloud sync of your transactions.</p>
+    </div>
+    <div class="bg-white rounded-2xl p-6 shadow-sm">
+      <div class="text-2xl mb-3">📴</div>
+      <h3 class="font-semibold mb-1">Works Offline</h3>
+      <p class="text-sm text-gray-500">All analysis, reports, and tax calculations work without internet. Live prices are fetched when online.</p>
+    </div>
+  </section>
+
+  <!-- Download section -->
+  <section id="download" class="bg-white border-t">
+    <div class="max-w-6xl mx-auto px-4 py-16 text-center">
+      <h2 class="text-2xl font-bold mb-2">Download Portfolio Tracker</h2>
+      <p class="text-gray-500 mb-8">Free to install. Subscription required for live prices.</p>
+      <div class="flex flex-col sm:flex-row gap-4 justify-center">
+        <a href="/downloads/PortfolioTracker-Setup.exe"
+           class="flex items-center gap-3 bg-gray-900 text-white rounded-xl px-6 py-4 hover:bg-gray-700">
+          <span class="text-2xl">🪟</span>
+          <div class="text-left">
+            <div class="text-xs text-gray-400">Download for</div>
+            <div class="font-semibold">Windows (.exe)</div>
+          </div>
+        </a>
+        <a href="/downloads/PortfolioTracker.dmg"
+           class="flex items-center gap-3 bg-gray-900 text-white rounded-xl px-6 py-4 hover:bg-gray-700">
+          <span class="text-2xl">🍎</span>
+          <div class="text-left">
+            <div class="text-xs text-gray-400">Download for</div>
+            <div class="font-semibold">macOS (.dmg)</div>
+          </div>
+        </a>
+      </div>
+      <p class="text-xs text-gray-400 mt-6">After installing: Register → Purchase subscription → Open app → Login</p>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="text-center text-xs text-gray-400 py-8">
+    © 2026 Portfolio Tracker · <a href="auth.html" class="hover:underline">Login</a> · <a href="auth.html#register" class="hover:underline">Register</a>
+  </footer>
+
+  <script>
+    // Auto-detect OS for download button
+    const ua = navigator.userAgent;
+    const btn = document.getElementById('download-btn');
+    if (/Mac/.test(ua)) {
+      btn.href = '/downloads/PortfolioTracker.dmg';
+      btn.textContent = 'Download for macOS';
+    }
+  </script>
+</body>
+</html>

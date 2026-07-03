@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.database import get_db
+from app.routers.deps import require_active_subscription
 
 router = APIRouter()
 
@@ -316,6 +317,7 @@ def get_instrument_updates(
     instrument_ids: List[int] = Query(None, description="Filter by instrument_ids"),
     since: Optional[str] = Query(None, description="ISO datetime e.g. 2026-04-16T10:30:00"),
     db: Session = Depends(get_db),
+    _user: dict = Depends(require_active_subscription),
 ):
     """
     Return instrument metadata for delta sync.
@@ -375,6 +377,7 @@ def get_instrument_updates(
 def resolve_instruments(
     refs: List[PendingRef],
     db: Session = Depends(get_db),
+    _user: dict = Depends(require_active_subscription),
 ):
     """
     Resolve pending instruments from the client.
@@ -414,6 +417,7 @@ def resolve_instruments(
 def search_instruments(
     q: str = Query(..., min_length=1, description="ISIN, symbol, or name"),
     db: Session = Depends(get_db),
+    _user: dict = Depends(require_active_subscription),
 ):
     """Search instruments by ISIN, symbol, or name."""
     results = db.execute(

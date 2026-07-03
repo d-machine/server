@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "windows_url": "/downloads/PortfolioTracker-Setup.exe",
+  "mac_url": "/downloads/PortfolioTracker.dmg",
+  "release_notes": "Initial release"
+}

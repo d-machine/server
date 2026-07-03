@@ -8,7 +8,9 @@ from typing import Optional
 from fastapi import FastAPI, Query
 
 from app.db_init import init as init_db
+from app.auth_db_init import init as init_auth_db
 from app.routers import instruments, prices, bhavcopy as bhavcopy_router
+from app.routers import auth as auth_router, subscriptions as subs_router
 from app.cron.fetch_prices import run_all as run_eod_fetch, warm_cache
 from app.cron.populate_instruments import run_all as populate_instruments
 from app.cron.download_bhavcopy import download_all as download_bhavcopy
@@ -27,19 +29,47 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _cancel_expired_declined_subscriptions():
+    """Run hourly: cancel DECLINED subscriptions whose 24h notice has elapsed."""
+    from app.auth_db import AuthSessionLocal
+    from sqlalchemy import text as _text
+    db = AuthSessionLocal()
+    try:
+        db.execute(_text("""
+            UPDATE subscriptions
+            SET status='CANCELLED'
+            WHERE status='DECLINED'
+              AND cancel_at IS NOT NULL
+              AND cancel_at <= datetime('now')
+        """))
+        db.commit()
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup ---
     init_db()
+    init_auth_db()
     warm_cache(date.today())
+
+    from apscheduler.schedulers.background import BackgroundScheduler
+    _scheduler = BackgroundScheduler()
+    _scheduler.add_job(_cancel_expired_declined_subscriptions, "interval", hours=1)
+    _scheduler.start()
+
     logger.info("Server started — all cron jobs disabled, use /admin/* endpoints to trigger manually")
     yield
     # --- Shutdown ---
+    _scheduler.shutdown(wait=False)
     logger.info("Server stopped")
 
 
 app = FastAPI(title="Portfolio Tracker Server", version="0.1.0", lifespan=lifespan)
 
+app.include_router(auth_router.router,      prefix="/auth",           tags=["auth"])
+app.include_router(subs_router.router,      prefix="/subscriptions",  tags=["subscriptions"])
 app.include_router(instruments.router,      prefix="/instruments",    tags=["instruments"])
 app.include_router(prices.router,           prefix="/prices",         tags=["prices"])
 app.include_router(bhavcopy_router.router,  prefix="/admin/bhavcopy", tags=["bhavcopy"])
@@ -120,3 +150,18 @@ def admin_bhavcopy_status(
          "error": r[6], "updated_at": r[7]}
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Static file mounts (must be last — API routes take priority)
+# ---------------------------------------------------------------------------
+from pathlib import Path as _Path
+from fastapi.staticfiles import StaticFiles as _StaticFiles
+
+_downloads_dir = _Path("downloads")
+_downloads_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/downloads", _StaticFiles(directory=str(_downloads_dir)), name="downloads")
+
+_website_dir = _Path("website")
+if _website_dir.exists():
+    app.mount("/", _StaticFiles(directory=str(_website_dir), html=True), name="website")

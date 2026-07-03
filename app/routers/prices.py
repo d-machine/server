@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from app.database import get_db
 from app import cache
+from app.routers.deps import require_active_subscription
 
 router = APIRouter()
 
@@ -15,6 +16,7 @@ router = APIRouter()
 def latest_prices(
     instrument_ids: List[int] = Query(None, description="List of server instrument_ids"),
     isins: List[str] = Query(None, description="[Legacy] List of ISINs the client holds"),
+    _user: dict = Depends(require_active_subscription),
 ):
     """
     Return today's latest price (OHLC) for each ISIN.
@@ -58,6 +60,7 @@ def sync_prices(
                     "Format: YYYY-MM-DDTHH:MM:SS  e.g. 2026-04-16T10:30:00",
     ),
     db: Session = Depends(get_db),
+    _user: dict = Depends(require_active_subscription),
 ):
     """
     Incremental price sync.

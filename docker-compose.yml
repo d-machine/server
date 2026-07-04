@@ -2,14 +2,14 @@ services:
   portfolio-server:
     build: .
     container_name: portfolio-server
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     volumes:
-      - ./data:/app/data          # SQLite DB
-      - ./inbox:/app/inbox        # Drop files here for manual registration
-      - ./errors:/app/errors      # Download error logs dumped here
-      - ./logs:/app/logs          # App logs
-      - ./scripts:/app/scripts    # Utility scripts (reset_db, scan_bhavcopy_files, etc.)
+      - ./data:/app/data
+      - ./inbox:/app/inbox
+      - ./errors:/app/errors
+      - ./logs:/app/logs
+      - ./scripts:/app/scripts
     environment:
       - DB_PATH=/app/data/portfolio_server.db
       - ERRORS_PATH=/app/errors
@@ -22,3 +22,38 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  website:
+    image: nginx:alpine
+    container_name: portfolio-website
+    expose:
+      - "80"
+    volumes:
+      - ./website:/usr/share/nginx/html:ro
+      - ./nginx-website.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: portfolio-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+    depends_on:
+      - portfolio-server
+      - website
+    restart: unless-stopped
+
+  certbot:
+    image: certbot/certbot
+    container_name: portfolio-certbot
+    volumes:
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
+    # Run manually: docker compose run --rm certbot certonly ...
+    entrypoint: /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"
+    restart: unless-stopped

@@ -152,16 +152,3 @@ def admin_bhavcopy_status(
     ]
 
 
-# ---------------------------------------------------------------------------
-# Static file mounts (must be last — API routes take priority)
-# ---------------------------------------------------------------------------
-from pathlib import Path as _Path
-from fastapi.staticfiles import StaticFiles as _StaticFiles
-
-_downloads_dir = _Path("downloads")
-_downloads_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/downloads", _StaticFiles(directory=str(_downloads_dir)), name="downloads")
-
-_website_dir = _Path("website")
-if _website_dir.exists():
-    app.mount("/", _StaticFiles(directory=str(_website_dir), html=True), name="website")

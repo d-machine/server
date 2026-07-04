@@ -69,32 +69,31 @@ class TestRequireActiveSubscription:
         # DB is empty so it might return 200 with empty data — what matters is NOT 403
         assert r.status_code != 403
 
-    def test_pending_subscription_blocked(self, client, bearer):
+    def test_pending_subscription_blocked(self, client, bearer, person_id):
         """PENDING_APPROVAL status should NOT grant access."""
         from io import BytesIO
-        from unittest.mock import patch
-        from tests.conftest import auth_headers as _ah
-
-        with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1.png"):
-            client.post(
-                "/subscriptions/submit",
-                data={"plan": "MONTH"},
-                files={"screenshot": ("f.png", BytesIO(b"x"), "image/png")},
-                headers=bearer,
-            )
+        import json as _json
+        persons_payload = _json.dumps([{"person_id": person_id, "amount": 1000}])
+        client.post(
+            "/subscriptions/submit",
+            data={"persons": persons_payload},
+            files={"screenshot": ("f.png", BytesIO(b"x"), "image/png")},
+            headers=bearer,
+        )
         r = client.get("/prices/latest", headers=bearer)
         assert r.status_code == 403
 
-    def test_declined_subscription_blocked(self, client, bearer, admin_headers):
+    def test_declined_subscription_blocked(self, client, bearer, admin_headers, person_id):
         from io import BytesIO
-        with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1.png"):
-            resp = client.post(
-                "/subscriptions/submit",
-                data={"plan": "MONTH"},
-                files={"screenshot": ("f.png", BytesIO(b"x"), "image/png")},
-                headers=bearer,
-            )
-        sub_id = resp.json()["subscription_id"]
+        import json as _json
+        persons_payload = _json.dumps([{"person_id": person_id, "amount": 1000}])
+        resp = client.post(
+            "/subscriptions/submit",
+            data={"persons": persons_payload},
+            files={"screenshot": ("f.png", BytesIO(b"x"), "image/png")},
+            headers=bearer,
+        )
+        sub_id = resp.json()["created"][0]["subscription_id"]
         client.post(f"/subscriptions/admin/{sub_id}/decline",
                     data={"reason": "Bad"}, headers=admin_headers)
         r = client.get("/prices/latest", headers=bearer)

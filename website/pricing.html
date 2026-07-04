@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pricing — Portfolio Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-900">
+
+  <nav class="bg-white border-b sticky top-0 z-10">
+    <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
+      <a href="index.html" class="font-bold text-lg">Portfolio Tracker</a>
+      <div class="flex items-center gap-3">
+        <a href="pricing.html" class="text-sm font-medium text-blue-600 px-3 py-1.5">Pricing</a>
+        <a href="auth.html" class="text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5">Login</a>
+        <a href="auth.html#register" class="text-sm bg-blue-600 text-white rounded-lg px-4 py-1.5 hover:bg-blue-700">Register</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="max-w-4xl mx-auto px-4 py-16 text-center">
+    <h1 class="text-4xl font-bold mb-3">Simple, performance-linked pricing</h1>
+    <p class="text-lg text-gray-500 max-w-xl mx-auto">
+      Start with a flat subscription. If your capital gains grow beyond ₹10 lakh, pricing scales modestly — capped at ₹10,000/year no matter how large your portfolio.
+    </p>
+  </section>
+
+  <!-- Plan cards -->
+  <section class="max-w-3xl mx-auto px-4 pb-16">
+    <div class="grid sm:grid-cols-2 gap-6">
+
+      <!-- Monthly -->
+      <div class="bg-white rounded-2xl p-8 shadow-sm border border-gray-100">
+        <div class="text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">Monthly</div>
+        <div class="flex items-end gap-1 mb-1">
+          <span class="text-4xl font-bold">₹99</span>
+          <span class="text-gray-400 mb-1">/month</span>
+        </div>
+        <p class="text-sm text-gray-500 mb-6">Per portfolio account. Cancel anytime.</p>
+        <ul class="text-sm text-gray-600 space-y-2 mb-8">
+          <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5">✓</span> Live price sync</li>
+          <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5">✓</span> Capital gains reports</li>
+          <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5">✓</span> Tax computation (STCG / LTCG)</li>
+          <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5">✓</span> All asset types</li>
+        </ul>
+        <a href="subscribe.html" class="block text-center border border-blue-600 text-blue-600 rounded-xl py-2.5 font-medium hover:bg-blue-50">
+          Get Started
+        </a>
+      </div>
+
+      <!-- Yearly -->
+      <div class="bg-blue-600 rounded-2xl p-8 shadow-sm text-white relative">
+        <div class="absolute top-4 right-4 bg-white text-blue-600 text-xs font-semibold px-2 py-0.5 rounded-full">Best Value</div>
+        <div class="text-sm font-medium text-blue-100 uppercase tracking-wide mb-2">Yearly</div>
+        <div class="flex items-end gap-1 mb-1">
+          <span class="text-4xl font-bold">₹1,000</span>
+          <span class="text-blue-200 mb-1">/year</span>
+        </div>
+        <p class="text-sm text-blue-200 mb-6">Save ₹188 compared to monthly. Billed annually.</p>
+        <ul class="text-sm text-blue-100 space-y-2 mb-8">
+          <li class="flex items-start gap-2"><span class="text-white mt-0.5">✓</span> Everything in Monthly</li>
+          <li class="flex items-start gap-2"><span class="text-white mt-0.5">✓</span> 2 months free</li>
+          <li class="flex items-start gap-2"><span class="text-white mt-0.5">✓</span> Gains-linked pricing</li>
+          <li class="flex items-start gap-2"><span class="text-white mt-0.5">✓</span> Priority support</li>
+        </ul>
+        <a href="subscribe.html" class="block text-center bg-white text-blue-600 rounded-xl py-2.5 font-medium hover:bg-blue-50">
+          Get Started
+        </a>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Dynamic pricing explanation -->
+  <section class="bg-white border-t border-b">
+    <div class="max-w-3xl mx-auto px-4 py-14">
+      <h2 class="text-2xl font-bold mb-3">Pricing that grows with your gains</h2>
+      <p class="text-gray-500 mb-8">
+        For investors with larger capital gains, we share in your success — fairly and transparently. You never pay more than a small fraction of your gains, and there's a hard ceiling of ₹10,000/year.
+      </p>
+      <div class="grid sm:grid-cols-3 gap-6">
+        <div class="bg-gray-50 rounded-xl p-5">
+          <div class="text-2xl mb-3">📉</div>
+          <h3 class="font-semibold mb-1">Gains under ₹10 lakh?</h3>
+          <p class="text-sm text-gray-500">Pay only the standard plan price — ₹99/month or ₹1,000/year. No extras.</p>
+        </div>
+        <div class="bg-gray-50 rounded-xl p-5">
+          <div class="text-2xl mb-3">📈</div>
+          <h3 class="font-semibold mb-1">Larger gains?</h3>
+          <p class="text-sm text-gray-500">Pay a small additional amount proportional to your gains above ₹10 lakh. A fraction of a percent.</p>
+        </div>
+        <div class="bg-gray-50 rounded-xl p-5">
+          <div class="text-2xl mb-3">🔒</div>
+          <h3 class="font-semibold mb-1">Always capped</h3>
+          <p class="text-sm text-gray-500">Maximum ₹10,000/year — no matter how large your gains. No surprises.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing calculator -->
+  <section class="max-w-xl mx-auto px-4 py-14">
+    <h2 class="text-2xl font-bold mb-2 text-center">Estimate your price</h2>
+    <p class="text-center text-gray-500 mb-8">Enter your estimated capital gains for the year to see what you'd pay.</p>
+
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
+      <label class="block text-sm font-medium text-gray-700 mb-2">
+        Estimated capital gains this year (₹)
+      </label>
+      <input
+        id="gains-input"
+        type="number"
+        min="0"
+        step="10000"
+        placeholder="e.g. 500000"
+        class="w-full border border-gray-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 mb-6"
+        oninput="updatePrice()"
+      />
+
+      <div class="bg-blue-50 rounded-xl px-6 py-5 text-center">
+        <div class="text-sm text-gray-500 mb-1">Your estimated annual price</div>
+        <div id="price-display" class="text-3xl font-bold text-blue-700">₹1,000</div>
+        <div class="text-xs text-gray-400 mt-2">or ₹99/month if you prefer monthly billing</div>
+      </div>
+
+      <p class="text-xs text-gray-400 mt-4 text-center">
+        Pricing is calculated in the app based on your actual realized gains. The amount shown here is an estimate.
+      </p>
+    </div>
+
+    <div class="text-center mt-8">
+      <a href="subscribe.html" class="inline-block bg-blue-600 text-white rounded-xl px-8 py-3 font-medium hover:bg-blue-700">
+        Subscribe Now
+      </a>
+    </div>
+  </section>
+
+  <!-- FAQ / fine print -->
+  <section class="max-w-3xl mx-auto px-4 pb-16">
+    <div class="border-t pt-10">
+      <h3 class="font-semibold text-lg mb-4">Common questions</h3>
+      <div class="space-y-4 text-sm text-gray-600">
+        <div>
+          <p class="font-medium text-gray-800">Is payment automatic or manual?</p>
+          <p class="mt-1">Manual UPI payment. You pay via UPI, upload the screenshot on the subscribe page, and our team verifies it (usually within a few hours).</p>
+        </div>
+        <div>
+          <p class="font-medium text-gray-800">Can I track multiple people?</p>
+          <p class="mt-1">Yes. CAs and advisors can track multiple clients under one account. Each person is priced independently based on their gains.</p>
+        </div>
+        <div>
+          <p class="font-medium text-gray-800">What happens when my subscription expires?</p>
+          <p class="mt-1">Your local data is always yours — you can still add, edit, and delete transactions. Live prices and Capital Gains / Tax reports require an active subscription.</p>
+        </div>
+        <div>
+          <p class="font-medium text-gray-800">Is my financial data sent to the server?</p>
+          <p class="mt-1">No. All your transaction data stays on your device, encrypted with AES-256. The server only provides live market prices.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="text-center text-xs text-gray-400 py-8 border-t">
+    © 2026 Portfolio Tracker · <a href="auth.html" class="hover:underline">Login</a> · <a href="auth.html#register" class="hover:underline">Register</a>
+  </footer>
+
+  <script>
+    function computePrice(gains) {
+      return Math.min(10000, 1000 + 0.0002 * Math.max(0, gains - 1000000));
+    }
+
+    function updatePrice() {
+      const raw = parseFloat(document.getElementById('gains-input').value) || 0;
+      const price = computePrice(raw);
+      document.getElementById('price-display').textContent =
+        '₹' + Math.round(price).toLocaleString('en-IN');
+    }
+  </script>
+</body>
+</html>

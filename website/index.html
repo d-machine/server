@@ -12,7 +12,8 @@
   <nav class="bg-white border-b sticky top-0 z-10">
     <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
       <span class="font-bold text-lg">Portfolio Tracker</span>
-      <div class="flex gap-3">
+      <div class="flex gap-3 items-center">
+        <a href="pricing.html" class="text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5">Pricing</a>
         <a href="auth.html" class="text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5">Login</a>
         <a href="auth.html#register" class="text-sm bg-blue-600 text-white rounded-lg px-4 py-1.5 hover:bg-blue-700">Register</a>
       </div>
@@ -27,7 +28,7 @@
       Live prices via secure server sync.
     </p>
     <div class="flex flex-col sm:flex-row gap-3 justify-center">
-      <a id="download-btn" href="#download" class="bg-blue-600 text-white rounded-xl px-8 py-3 text-base font-medium hover:bg-blue-700">
+      <a href="/downloads/PortfolioTracker-Setup.exe" class="bg-blue-600 text-white rounded-xl px-8 py-3 text-base font-medium hover:bg-blue-700">
         Download for Windows
       </a>
       <a href="auth.html#register" class="border border-gray-300 rounded-xl px-8 py-3 text-base font-medium hover:bg-gray-100">
@@ -69,14 +70,6 @@
             <div class="font-semibold">Windows (.exe)</div>
           </div>
         </a>
-        <a href="/downloads/PortfolioTracker.dmg"
-           class="flex items-center gap-3 bg-gray-900 text-white rounded-xl px-6 py-4 hover:bg-gray-700">
-          <span class="text-2xl">🍎</span>
-          <div class="text-left">
-            <div class="text-xs text-gray-400">Download for</div>
-            <div class="font-semibold">macOS (.dmg)</div>
-          </div>
-        </a>
       </div>
       <p class="text-xs text-gray-400 mt-6">After installing: Register → Purchase subscription → Open app → Login</p>
     </div>
@@ -87,14 +80,5 @@
     © 2026 Portfolio Tracker · <a href="auth.html" class="hover:underline">Login</a> · <a href="auth.html#register" class="hover:underline">Register</a>
   </footer>
 
-  <script>
-    // Auto-detect OS for download button
-    const ua = navigator.userAgent;
-    const btn = document.getElementById('download-btn');
-    if (/Mac/.test(ua)) {
-      btn.href = '/downloads/PortfolioTracker.dmg';
-      btn.textContent = 'Download for macOS';
-    }
-  </script>
 </body>
 </html>

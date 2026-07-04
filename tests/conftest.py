@@ -90,8 +90,6 @@ def client(main_engine, auth_engine):
         finally:
             db.close()
 
-    from app.routers import instruments, prices, auth as auth_router, subscriptions as subs_router
-    from app.routers.deps import get_current_user, require_active_subscription
     from app import database, auth_db
 
     app_module.app.dependency_overrides[database.get_db]      = override_get_db
@@ -100,7 +98,8 @@ def client(main_engine, auth_engine):
     # Patch GCS and email sending globally for all tests
     with patch("app.routers.subscriptions._gcs_bucket"), \
          patch("app.routers.subscriptions._send_email"), \
-         patch("app.routers.auth._send_email"):
+         patch("app.routers.auth._send_email"), \
+         patch("app.routers.deps._send_underpaid_email"):
         with TestClient(app_module.app, raise_server_exceptions=True) as c:
             yield c
 
@@ -143,22 +142,37 @@ def admin_headers():
     return {"Authorization": f"Basic {creds}"}
 
 
+def create_person(client, bearer, pan_hash="aabbcc", masked_pan="ABCDE****F", display_name="Test Person"):
+    r = client.post(
+        "/persons",
+        json={"pan_hash": pan_hash, "masked_pan": masked_pan, "display_name": display_name},
+        headers=bearer,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["person_id"]
+
+
 @pytest.fixture
-def active_subscription(client, registered_user, admin_headers, auth_engine):
-    """Give the test user an ACTIVE subscription via the admin approve endpoint."""
-    # Submit a dummy subscription (mock the file upload)
+def person_id(client, bearer):
+    return create_person(client, bearer)
+
+
+@pytest.fixture
+def active_subscription(client, registered_user, admin_headers, bearer, person_id):
+    """Give the test person an ACTIVE subscription via the admin approve endpoint."""
     from io import BytesIO
-    with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1_test.png"):
+    import json
+    persons_payload = json.dumps([{"person_id": person_id, "amount": 1000}])
+    with patch("app.routers.subscriptions._gcs_bucket"):
         r = client.post(
             "/subscriptions/submit",
-            data={"plan": "MONTH"},
+            data={"persons": persons_payload},
             files={"screenshot": ("test.png", BytesIO(b"fake"), "image/png")},
-            headers={"Authorization": f"Bearer {registered_user['access_token']}"},
+            headers=bearer,
         )
     assert r.status_code == 200, r.text
-    sub_id = r.json()["subscription_id"]
+    sub_id = r.json()["created"][0]["subscription_id"]
 
-    # Admin approves
     r = client.post(f"/subscriptions/admin/{sub_id}/approve", headers=admin_headers)
     assert r.status_code == 200, r.text
     return sub_id

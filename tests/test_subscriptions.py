@@ -8,18 +8,20 @@ import pytest
 from tests.conftest import register_user, login_user, auth_headers
 
 
-DUMMY_FILE = ("test.png", BytesIO(b"fakepng"), "image/png")
+import json as _json
 
 
 def _fresh_file():
     return ("test.png", BytesIO(b"fakepng"), "image/png")
 
 
-def _submit_subscription(client, bearer, plan="MONTH"):
-    with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1_test.png"):
+def _submit_subscription(client, bearer, person_id, amount=1000):
+    """Submit a subscription for a single person."""
+    persons_payload = _json.dumps([{"person_id": person_id, "amount": amount}])
+    with patch("app.routers.subscriptions._gcs_bucket"):
         r = client.post(
             "/subscriptions/submit",
-            data={"plan": plan},
+            data={"persons": persons_payload},
             files={"screenshot": _fresh_file()},
             headers=bearer,
         )
@@ -29,44 +31,53 @@ def _submit_subscription(client, bearer, plan="MONTH"):
 # ── Submit subscription ───────────────────────────────────────────────────────
 
 class TestSubmitSubscription:
-    def test_submit_success(self, client, bearer):
-        r = _submit_subscription(client, bearer)
+    def test_submit_success(self, client, bearer, person_id):
+        r = _submit_subscription(client, bearer, person_id)
         assert r.status_code == 200
         data = r.json()
-        assert data["status"] == "PENDING_APPROVAL"
-        assert "subscription_id" in data
+        assert "created" in data
+        assert data["created"][0]["status"] == "PENDING_APPROVAL"
 
     def test_submit_requires_auth(self, client):
-        with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1_test.png"):
-            r = client.post(
-                "/subscriptions/submit",
-                data={"plan": "MONTH"},
-                files={"screenshot": _fresh_file()},
-            )
+        r = client.post(
+            "/subscriptions/submit",
+            data={"persons": _json.dumps([{"person_id": 1, "amount": 1000}])},
+            files={"screenshot": _fresh_file()},
+        )
         assert r.status_code in (401, 422)
 
-    def test_submit_invalid_plan(self, client, bearer):
-        with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1_test.png"):
+    def test_submit_invalid_person(self, client, bearer):
+        with patch("app.routers.subscriptions._gcs_bucket"):
             r = client.post(
                 "/subscriptions/submit",
-                data={"plan": "WEEKLY"},
+                data={"persons": _json.dumps([{"person_id": 9999, "amount": 1000}])},
                 files={"screenshot": _fresh_file()},
                 headers=bearer,
             )
-        assert r.status_code in (400, 422)
+        assert r.status_code == 400
 
-    def test_submit_all_plans(self, client, bearer):
-        for plan in ["MONTH", "QUARTER", "SEMESTER", "YEAR"]:
-            register_user(client, email=f"{plan}@example.com")
-            ld = login_user(client, email=f"{plan}@example.com")
-            h = {"Authorization": f"Bearer {ld['access_token']}"}
-            r = _submit_subscription(client, h, plan=plan)
-            assert r.status_code == 200, f"Plan {plan} failed: {r.text}"
+    def test_submit_multi_person(self, client, bearer):
+        from tests.conftest import create_person
+        p1 = create_person(client, bearer, pan_hash="hash1", masked_pan="AAAAA****A")
+        p2 = create_person(client, bearer, pan_hash="hash2", masked_pan="BBBBB****B")
+        persons_payload = _json.dumps([
+            {"person_id": p1, "amount": 1000},
+            {"person_id": p2, "amount": 1200},
+        ])
+        with patch("app.routers.subscriptions._gcs_bucket"):
+            r = client.post(
+                "/subscriptions/submit",
+                data={"persons": persons_payload},
+                files={"screenshot": _fresh_file()},
+                headers=bearer,
+            )
+        assert r.status_code == 200
+        assert len(r.json()["created"]) == 2
 
-    def test_submit_requires_screenshot(self, client, bearer):
+    def test_submit_requires_screenshot(self, client, bearer, person_id):
         r = client.post(
             "/subscriptions/submit",
-            data={"plan": "MONTH"},
+            data={"persons": _json.dumps([{"person_id": person_id, "amount": 1000}])},
             headers=bearer,
         )
         assert r.status_code == 422
@@ -80,18 +91,21 @@ class TestSubscriptionStatus:
         assert r.status_code == 200
         assert r.json().get("has_subscription") is False
 
-    def test_status_pending(self, client, bearer):
-        _submit_subscription(client, bearer)
+    def test_status_pending(self, client, bearer, person_id):
+        _submit_subscription(client, bearer, person_id)
         r = client.get("/subscriptions/status", headers=bearer)
         assert r.status_code == 200
-        assert r.json()["status"] == "PENDING_APPROVAL"
+        data = r.json()
+        assert data["has_subscription"] is True
+        assert data["persons"][0]["status"] == "PENDING_APPROVAL"
 
-    def test_status_after_approval(self, client, bearer, admin_headers):
-        resp = _submit_subscription(client, bearer)
-        sub_id = resp.json()["subscription_id"]
-        client.post(f"/subscriptions/admin/{sub_id}/approve", headers=admin_headers)
+    def test_status_after_approval(self, client, bearer, admin_headers, person_id):
+        resp = _submit_subscription(client, bearer, person_id)
+        sub_id = resp.json()["created"][0]["subscription_id"]
+        with patch("app.routers.subscriptions._send_email"):
+            client.post(f"/subscriptions/admin/{sub_id}/approve", headers=admin_headers)
         r = client.get("/subscriptions/status", headers=bearer)
-        assert r.json()["status"] == "ACTIVE"
+        assert r.json()["persons"][0]["status"] == "ACTIVE"
 
     def test_status_requires_auth(self, client):
         r = client.get("/subscriptions/status")
@@ -101,38 +115,39 @@ class TestSubscriptionStatus:
 # ── Replace screenshot ────────────────────────────────────────────────────────
 
 class TestReplaceScreenshot:
-    def _decline_sub(self, client, bearer, admin_headers):
-        resp = _submit_subscription(client, bearer)
-        sub_id = resp.json()["subscription_id"]
-        client.post(f"/subscriptions/admin/{sub_id}/decline",
-                    data={"reason": "Blurry image"}, headers=admin_headers)
-        return sub_id
+    def _decline_sub(self, client, bearer, admin_headers, person_id):
+        resp = _submit_subscription(client, bearer, person_id)
+        sub_id = resp.json()["created"][0]["subscription_id"]
+        with patch("app.routers.subscriptions._send_email"):
+            client.post(f"/subscriptions/admin/{sub_id}/decline",
+                        data={"reason": "Blurry image"}, headers=admin_headers)
+        return person_id
 
-    def test_replace_on_declined_success(self, client, bearer, admin_headers):
-        self._decline_sub(client, bearer, admin_headers)
-        with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1_new.png"):
+    def test_replace_on_declined_success(self, client, bearer, admin_headers, person_id):
+        self._decline_sub(client, bearer, admin_headers, person_id)
+        with patch("app.routers.subscriptions._gcs_bucket"):
             r = client.post(
-                "/subscriptions/replace-screenshot",
+                f"/subscriptions/replace-screenshot/{person_id}",
                 files={"screenshot": _fresh_file()},
                 headers=bearer,
             )
         assert r.status_code == 200
         assert r.json()["status"] == "PENDING_APPROVAL"
 
-    def test_replace_on_pending_fails(self, client, bearer):
-        _submit_subscription(client, bearer)
-        with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1_new.png"):
+    def test_replace_on_pending_fails(self, client, bearer, person_id):
+        _submit_subscription(client, bearer, person_id)
+        with patch("app.routers.subscriptions._gcs_bucket"):
             r = client.post(
-                "/subscriptions/replace-screenshot",
+                f"/subscriptions/replace-screenshot/{person_id}",
                 files={"screenshot": _fresh_file()},
                 headers=bearer,
             )
         assert r.status_code == 400
 
-    def test_replace_no_subscription_fails(self, client, bearer):
-        with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1_new.png"):
+    def test_replace_no_subscription_fails(self, client, bearer, person_id):
+        with patch("app.routers.subscriptions._gcs_bucket"):
             r = client.post(
-                "/subscriptions/replace-screenshot",
+                f"/subscriptions/replace-screenshot/{person_id}",
                 files={"screenshot": _fresh_file()},
                 headers=bearer,
             )
@@ -142,16 +157,16 @@ class TestReplaceScreenshot:
 # ── Admin: list subscriptions ─────────────────────────────────────────────────
 
 class TestAdminList:
-    def test_list_all(self, client, bearer, admin_headers):
-        _submit_subscription(client, bearer)
+    def test_list_all(self, client, bearer, admin_headers, person_id):
+        _submit_subscription(client, bearer, person_id)
         r = client.get("/subscriptions/admin", headers=admin_headers)
         assert r.status_code == 200
         data = r.json()
         assert isinstance(data, list)
         assert len(data) >= 1
 
-    def test_list_filter_by_status(self, client, bearer, admin_headers):
-        _submit_subscription(client, bearer)
+    def test_list_filter_by_status(self, client, bearer, admin_headers, person_id):
+        _submit_subscription(client, bearer, person_id)
         r = client.get("/subscriptions/admin?status=PENDING_APPROVAL", headers=admin_headers)
         assert r.status_code == 200
         for item in r.json():
@@ -170,15 +185,15 @@ class TestAdminList:
 # ── Admin: approve ────────────────────────────────────────────────────────────
 
 class TestAdminApprove:
-    def test_approve_sets_active(self, client, bearer, admin_headers):
-        sub_id = _submit_subscription(client, bearer).json()["subscription_id"]
+    def test_approve_sets_active(self, client, bearer, admin_headers, person_id):
+        sub_id = _submit_subscription(client, bearer, person_id).json()["created"][0]["subscription_id"]
         with patch("app.routers.subscriptions._send_email"):
             r = client.post(f"/subscriptions/admin/{sub_id}/approve", headers=admin_headers)
         assert r.status_code == 200
         assert r.json()["ok"] is True
 
-    def test_approve_sets_expires_at(self, client, bearer, admin_headers):
-        sub_id = _submit_subscription(client, bearer, plan="MONTH").json()["subscription_id"]
+    def test_approve_sets_expires_at(self, client, bearer, admin_headers, person_id):
+        sub_id = _submit_subscription(client, bearer, person_id).json()["created"][0]["subscription_id"]
         with patch("app.routers.subscriptions._send_email"):
             r = client.post(f"/subscriptions/admin/{sub_id}/approve", headers=admin_headers)
         data = r.json()
@@ -188,14 +203,14 @@ class TestAdminApprove:
         r = client.post("/subscriptions/admin/9999/approve", headers=admin_headers)
         assert r.status_code == 404
 
-    def test_approve_sends_email(self, client, bearer, admin_headers):
-        sub_id = _submit_subscription(client, bearer).json()["subscription_id"]
+    def test_approve_sends_email(self, client, bearer, admin_headers, person_id):
+        sub_id = _submit_subscription(client, bearer, person_id).json()["created"][0]["subscription_id"]
         with patch("app.routers.subscriptions._send_email") as mock_mail:
             client.post(f"/subscriptions/admin/{sub_id}/approve", headers=admin_headers)
         mock_mail.assert_called_once()
 
-    def test_approve_requires_admin(self, client, bearer):
-        sub_id = _submit_subscription(client, bearer).json()["subscription_id"]
+    def test_approve_requires_admin(self, client, bearer, person_id):
+        sub_id = _submit_subscription(client, bearer, person_id).json()["created"][0]["subscription_id"]
         r = client.post(f"/subscriptions/admin/{sub_id}/approve", headers=bearer)
         assert r.status_code == 401
 
@@ -203,41 +218,40 @@ class TestAdminApprove:
 # ── Admin: decline ────────────────────────────────────────────────────────────
 
 class TestAdminDecline:
-    def test_decline_sets_declined(self, client, bearer, admin_headers):
-        sub_id = _submit_subscription(client, bearer).json()["subscription_id"]
+    def test_decline_sets_declined(self, client, bearer, admin_headers, person_id):
+        sub_id = _submit_subscription(client, bearer, person_id).json()["created"][0]["subscription_id"]
         with patch("app.routers.subscriptions._send_email"):
             r = client.post(f"/subscriptions/admin/{sub_id}/decline",
                             data={"reason": "Screenshot not legible"}, headers=admin_headers)
         assert r.status_code == 200
         assert r.json()["ok"] is True
 
-    def test_decline_sends_email(self, client, bearer, admin_headers):
-        sub_id = _submit_subscription(client, bearer).json()["subscription_id"]
+    def test_decline_sends_email(self, client, bearer, admin_headers, person_id):
+        sub_id = _submit_subscription(client, bearer, person_id).json()["created"][0]["subscription_id"]
         with patch("app.routers.subscriptions._send_email") as mock_mail:
             client.post(f"/subscriptions/admin/{sub_id}/decline",
                         data={"reason": "Bad"}, headers=admin_headers)
         mock_mail.assert_called_once()
 
-    def test_decline_active_sets_cancel_at(self, client, bearer, admin_headers):
+    def test_decline_active_sets_cancel_at(self, client, bearer, admin_headers, person_id):
         """Declining an ACTIVE subscription — status check via status endpoint."""
-        sub_id = _submit_subscription(client, bearer).json()["subscription_id"]
+        sub_id = _submit_subscription(client, bearer, person_id).json()["created"][0]["subscription_id"]
         with patch("app.routers.subscriptions._send_email"):
             client.post(f"/subscriptions/admin/{sub_id}/approve", headers=admin_headers)
         with patch("app.routers.subscriptions._send_email"):
             r = client.post(f"/subscriptions/admin/{sub_id}/decline",
                             data={"reason": "Fraud suspected"}, headers=admin_headers)
         assert r.status_code == 200
-        # Verify the subscription is now DECLINED
         status_r = client.get("/subscriptions/status", headers=bearer)
-        assert status_r.json()["status"] == "DECLINED"
+        assert status_r.json()["persons"][0]["status"] == "DECLINED"
 
     def test_decline_nonexistent(self, client, admin_headers):
         r = client.post("/subscriptions/admin/9999/decline",
                         data={"reason": "x"}, headers=admin_headers)
         assert r.status_code == 404
 
-    def test_decline_requires_reason(self, client, bearer, admin_headers):
-        sub_id = _submit_subscription(client, bearer).json()["subscription_id"]
+    def test_decline_requires_reason(self, client, bearer, admin_headers, person_id):
+        sub_id = _submit_subscription(client, bearer, person_id).json()["created"][0]["subscription_id"]
         r = client.post(f"/subscriptions/admin/{sub_id}/decline",
                         data={}, headers=admin_headers)
         assert r.status_code == 422
@@ -246,12 +260,12 @@ class TestAdminDecline:
 # ── Admin: upload screenshot on behalf of user ────────────────────────────────
 
 class TestAdminScreenshotUpload:
-    def test_admin_upload_resets_to_pending(self, client, bearer, admin_headers):
-        sub_id = _submit_subscription(client, bearer).json()["subscription_id"]
+    def test_admin_upload_resets_to_pending(self, client, bearer, admin_headers, person_id):
+        sub_id = _submit_subscription(client, bearer, person_id).json()["created"][0]["subscription_id"]
         with patch("app.routers.subscriptions._send_email"):
             client.post(f"/subscriptions/admin/{sub_id}/decline",
                         data={"reason": "Bad"}, headers=admin_headers)
-        with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1_admin.png"):
+        with patch("app.routers.subscriptions._gcs_bucket"):
             r = client.post(
                 f"/subscriptions/admin/{sub_id}/screenshot",
                 files={"screenshot": _fresh_file()},
@@ -260,9 +274,9 @@ class TestAdminScreenshotUpload:
         assert r.status_code == 200
         assert r.json()["status"] == "PENDING_APPROVAL"
 
-    def test_admin_upload_requires_admin(self, client, bearer):
-        sub_id = _submit_subscription(client, bearer).json()["subscription_id"]
-        with patch("app.routers.subscriptions._upload_screenshot", return_value="screenshots/1_admin.png"):
+    def test_admin_upload_requires_admin(self, client, bearer, person_id):
+        sub_id = _submit_subscription(client, bearer, person_id).json()["created"][0]["subscription_id"]
+        with patch("app.routers.subscriptions._gcs_bucket"):
             r = client.post(
                 f"/subscriptions/admin/{sub_id}/screenshot",
                 files={"screenshot": _fresh_file()},

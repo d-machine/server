@@ -1,3 +1,4 @@
+import json
 import os
 import smtplib
 from datetime import datetime, timedelta, timezone
@@ -21,7 +22,7 @@ SMTP_PASS        = os.getenv("SMTP_PASS", "")
 FROM_EMAIL       = os.getenv("FROM_EMAIL", "sumitshark13@gmail.com")
 BASE_URL         = os.getenv("BASE_URL", "https://arthdeskapi.ashokitservices.com")
 
-PLAN_DAYS = {"MONTH": 30, "QUARTER": 90, "SEMESTER": 180, "YEAR": 365}
+PLAN_DAYS = {"MONTH": 30, "YEAR": 365}
 
 _gcs_client: _gcs.Client | None = None
 
@@ -72,47 +73,76 @@ def _user_email(auth_db: Session, user_id: int) -> str:
 
 @router.post("/submit")
 async def submit_subscription(
-    plan: str = Form(...),
+    persons: str = Form(...),  # JSON: [{"person_id": 1, "amount": 1000}, ...]
     screenshot: UploadFile = File(...),
     user: dict = Depends(get_current_user),
     auth_db: Session = Depends(get_auth_db),
 ):
-    if plan not in PLAN_DAYS:
-        raise HTTPException(status_code=400, detail=f"Invalid plan. Choose from: {list(PLAN_DAYS)}")
+    """
+    Submit a payment screenshot covering one or more registered persons.
+    Creates one PENDING_APPROVAL subscription row per person.
+    """
+    try:
+        person_entries = json.loads(persons)
+        if not isinstance(person_entries, list) or not person_entries:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="'persons' must be a non-empty JSON array")
 
-    # Allow only one pending/active subscription at a time
-    existing = auth_db.execute(
-        text("""
-            SELECT subscription_id, status FROM subscriptions
-            WHERE user_id=:uid AND status IN ('PENDING_APPROVAL','ACTIVE')
-            LIMIT 1
-        """),
-        {"uid": user["user_id"]},
-    ).fetchone()
-    if existing:
-        raise HTTPException(
-            status_code=409,
-            detail=f"You already have a subscription with status '{existing[1]}'"
+    screenshot_bytes = await screenshot.read()
+
+    created = []
+    for entry in person_entries:
+        person_id = entry.get("person_id")
+        amount    = entry.get("amount", 1000)
+
+        # Verify the person belongs to this user
+        prow = auth_db.execute(
+            text("SELECT person_id FROM persons WHERE person_id=:pid AND user_id=:uid"),
+            {"pid": person_id, "uid": user["user_id"]},
+        ).fetchone()
+        if not prow:
+            raise HTTPException(status_code=400, detail=f"Person {person_id} not found")
+
+        # Block if already pending/active for this person
+        existing = auth_db.execute(
+            text("""
+                SELECT subscription_id, status FROM subscriptions
+                WHERE person_id=:pid AND status IN ('PENDING_APPROVAL','ACTIVE')
+                LIMIT 1
+            """),
+            {"pid": person_id},
+        ).fetchone()
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Person {person_id} already has a subscription with status '{existing[1]}'"
+            )
+
+        result = auth_db.execute(
+            text("""
+                INSERT INTO subscriptions (user_id, person_id, plan, status, paid_price)
+                VALUES (:uid, :pid, 'YEAR', 'PENDING_APPROVAL', :amount)
+            """),
+            {"uid": user["user_id"], "pid": person_id, "amount": amount},
         )
+        auth_db.commit()
+        subscription_id = result.lastrowid
 
-    result = auth_db.execute(
-        text("""
-            INSERT INTO subscriptions (user_id, plan, status)
-            VALUES (:uid, :plan, 'PENDING_APPROVAL')
-        """),
-        {"uid": user["user_id"], "plan": plan},
-    )
-    auth_db.commit()
-    subscription_id = result.lastrowid
+        import io
+        ext = (screenshot.filename or "screenshot").rsplit(".", 1)[-1].lower()
+        object_name = f"screenshots/{subscription_id}_{screenshot.filename}"
+        blob = _gcs_bucket().blob(object_name)
+        blob.upload_from_file(io.BytesIO(screenshot_bytes), content_type=screenshot.content_type or f"image/{ext}")
 
-    object_name = _upload_screenshot(subscription_id, screenshot)
-    auth_db.execute(
-        text("UPDATE subscriptions SET screenshot_path=:path WHERE subscription_id=:sid"),
-        {"path": object_name, "sid": subscription_id},
-    )
-    auth_db.commit()
+        auth_db.execute(
+            text("UPDATE subscriptions SET screenshot_path=:path WHERE subscription_id=:sid"),
+            {"path": object_name, "sid": subscription_id},
+        )
+        auth_db.commit()
+        created.append({"subscription_id": subscription_id, "person_id": person_id, "status": "PENDING_APPROVAL"})
 
-    return {"subscription_id": subscription_id, "status": "PENDING_APPROVAL", "plan": plan}
+    return {"created": created}
 
 
 @router.get("/status")
@@ -120,41 +150,56 @@ def subscription_status(
     user: dict = Depends(get_current_user),
     auth_db: Session = Depends(get_auth_db),
 ):
-    row = auth_db.execute(
+    """Returns subscription status for all persons associated with the logged-in user."""
+    rows = auth_db.execute(
         text("""
-            SELECT subscription_id, plan, status, expires_at, submitted_at, decline_reason
-            FROM subscriptions WHERE user_id=:uid ORDER BY created_at DESC LIMIT 1
+            SELECT s.subscription_id, s.person_id, p.display_name,
+                   s.status, s.expires_at, s.submitted_at, s.decline_reason, s.paid_price
+            FROM subscriptions s
+            JOIN persons p ON p.person_id = s.person_id
+            WHERE s.user_id=:uid
+            ORDER BY s.created_at DESC
         """),
         {"uid": user["user_id"]},
-    ).fetchone()
-    if not row:
-        return {"has_subscription": False}
+    ).fetchall()
+    if not rows:
+        return {"has_subscription": False, "persons": []}
     return {
-        "has_subscription":  True,
-        "subscription_id":   row[0],
-        "plan":              row[1],
-        "status":            row[2],
-        "expires_at":        row[3],
-        "submitted_at":      row[4],
-        "decline_reason":    row[5],
+        "has_subscription": True,
+        "persons": [
+            {
+                "subscription_id": r[0],
+                "person_id":       r[1],
+                "display_name":    r[2],
+                "status":          r[3],
+                "expires_at":      r[4],
+                "submitted_at":    r[5],
+                "decline_reason":  r[6],
+                "paid_price":      r[7],
+            }
+            for r in rows
+        ],
     }
 
 
-@router.post("/replace-screenshot")
+@router.post("/replace-screenshot/{person_id}")
 async def replace_screenshot(
+    person_id: int,
     screenshot: UploadFile = File(...),
     user: dict = Depends(get_current_user),
     auth_db: Session = Depends(get_auth_db),
 ):
     row = auth_db.execute(
         text("""
-            SELECT subscription_id, status FROM subscriptions
-            WHERE user_id=:uid ORDER BY created_at DESC LIMIT 1
+            SELECT s.subscription_id, s.status FROM subscriptions s
+            JOIN persons p ON p.person_id = s.person_id
+            WHERE s.person_id=:pid AND p.user_id=:uid
+            ORDER BY s.created_at DESC LIMIT 1
         """),
-        {"uid": user["user_id"]},
+        {"pid": person_id, "uid": user["user_id"]},
     ).fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="No subscription found")
+        raise HTTPException(status_code=404, detail="No subscription found for this person")
     if row[1] != "DECLINED":
         raise HTTPException(status_code=400, detail="Can only replace screenshot on DECLINED subscriptions")
 
@@ -185,9 +230,12 @@ def admin_list_subscriptions(
 ):
     query = """
         SELECT s.subscription_id, s.plan, s.status, s.expires_at, s.submitted_at,
-               s.decline_reason, s.cancel_at, s.screenshot_path,
-               u.email, u.name
-        FROM subscriptions s JOIN users u ON s.user_id=u.user_id
+               s.decline_reason, s.cancel_at, s.screenshot_path, s.paid_price,
+               u.email, u.name,
+               p.display_name AS person_name, p.masked_pan
+        FROM subscriptions s
+        JOIN users u ON s.user_id=u.user_id
+        LEFT JOIN persons p ON s.person_id=p.person_id
     """
     params: dict = {}
     if status:
@@ -213,8 +261,11 @@ def admin_list_subscriptions(
             "decline_reason":  r[5],
             "cancel_at":       r[6],
             "screenshot_url":  screenshot_url,
-            "email":           r[8],
-            "name":            r[9],
+            "paid_price":      r[8],
+            "email":           r[9],
+            "name":            r[10],
+            "person_name":     r[11],
+            "masked_pan":      r[12],
         })
     return result
 

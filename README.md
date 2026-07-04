@@ -66,28 +66,31 @@ Copy `.env` values into `docker-compose.yml` environment section:
 
 ### 5. Get SSL certificates (first time only)
 
-nginx needs certs to start, but certbot needs nginx running to issue certs.
-Bootstrap with a temporary HTTP-only config:
+nginx needs certs to start, but certbot needs nginx running first.
+Bootstrap order:
 
 ```bash
-# Start nginx with only the port 80 block active
-# Temporarily comment out the two `ssl` server blocks in nginx-proxy.conf
-# leaving only the HTTP block, then:
-docker compose up -d nginx certbot
+# Step 1: start nginx with the temporary HTTP-only config (already in repo)
+docker compose up -d nginx
 
-# Issue cert for API subdomain
-docker compose run --rm certbot certonly \
+# Step 2: issue certs using docker run directly (not docker compose run)
+docker run --rm \
+  -v $(pwd)/certbot/www:/var/www/certbot \
+  -v $(pwd)/certbot/conf:/etc/letsencrypt \
+  certbot/certbot certonly \
   --webroot -w /var/www/certbot \
   -d arthdeskapi.ashokitservices.com \
   --email sumitshark13@gmail.com --agree-tos --no-eff-email
 
-# Issue cert for website subdomain
-docker compose run --rm certbot certonly \
+docker run --rm \
+  -v $(pwd)/certbot/www:/var/www/certbot \
+  -v $(pwd)/certbot/conf:/etc/letsencrypt \
+  certbot/certbot certonly \
   --webroot -w /var/www/certbot \
   -d arthdesk.ashokitservices.com \
   --email sumitshark13@gmail.com --agree-tos --no-eff-email
 
-# Restore full nginx-proxy.conf (uncomment the 443 blocks)
+# Step 3: bring everything up with the full SSL config
 docker compose down
 ```
 

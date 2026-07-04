@@ -140,9 +140,10 @@ def register(req: RegisterRequest, auth_db: Session = Depends(get_auth_db)):
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
 
+    pan_salt = secrets.token_hex(16)
     auth_db.execute(
-        text("INSERT INTO users (email, name, password_hash) VALUES (:email, :name, :hash)"),
-        {"email": req.email, "name": req.name, "hash": _hash_password(req.password)},
+        text("INSERT INTO users (email, name, password_hash, pan_salt) VALUES (:email, :name, :hash, :salt)"),
+        {"email": req.email, "name": req.name, "hash": _hash_password(req.password), "salt": pan_salt},
     )
     auth_db.commit()
     row = auth_db.execute(
@@ -229,7 +230,12 @@ def logout(req: LogoutRequest, auth_db: Session = Depends(get_auth_db)):
 
 @router.get("/me")
 def me(user: dict = Depends(get_current_user), auth_db: Session = Depends(get_auth_db)):
-    return {**user, "subscription": _subscription_info(auth_db, user["user_id"])}
+    row = auth_db.execute(
+        text("SELECT pan_salt FROM users WHERE user_id = :uid"),
+        {"uid": user["user_id"]},
+    ).fetchone()
+    pan_salt = row[0] if row else ""
+    return {**user, "pan_salt": pan_salt, "subscription": _subscription_info(auth_db, user["user_id"])}
 
 
 @router.post("/forgot-password")

@@ -10,7 +10,7 @@ from fastapi import FastAPI, Query
 from app.db_init import init as init_db
 from app.auth_db_init import init as init_auth_db
 from app.routers import instruments, prices, bhavcopy as bhavcopy_router
-from app.routers import auth as auth_router, subscriptions as subs_router
+from app.routers import auth as auth_router, subscriptions as subs_router, persons as persons_router
 from app.cron.fetch_prices import run_all as run_eod_fetch, warm_cache
 from app.cron.populate_instruments import run_all as populate_instruments
 from app.cron.download_bhavcopy import download_all as download_bhavcopy
@@ -47,6 +47,72 @@ def _cancel_expired_declined_subscriptions():
         db.close()
 
 
+def _send_underpaid_reminders():
+    """Run daily at 09:00 IST: email underpaid users with ≤7 days left before lock."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from datetime import timedelta
+
+    smtp_pass = os.getenv("SMTP_PASS", "")
+    if not smtp_pass:
+        return
+
+    from app.auth_db import AuthSessionLocal
+    from sqlalchemy import text as _text
+    db = AuthSessionLocal()
+    try:
+        rows = db.execute(_text("""
+            SELECT u.person_id, u.required_price, u.underpaid_since,
+                   u.last_reminder_at, usr.email
+            FROM underpaid_users u
+            JOIN persons p ON p.person_id = u.person_id
+            JOIN users usr ON usr.user_id = p.user_id
+            WHERE date(u.underpaid_since, '+23 days') <= date('now')
+              AND date(u.underpaid_since, '+30 days') >= date('now')
+              AND (u.last_reminder_at IS NULL
+                   OR datetime(u.last_reminder_at, '+24 hours') <= datetime('now'))
+        """)).fetchall()
+
+        smtp_host  = os.getenv("SMTP_HOST", "smtp.gmail.com")
+        smtp_port  = int(os.getenv("SMTP_PORT", 587))
+        smtp_user  = os.getenv("SMTP_USER", "sumitshark13@gmail.com")
+        from_email = os.getenv("FROM_EMAIL", "sumitshark13@gmail.com")
+        base_url   = os.getenv("BASE_URL", "https://arthdeskapi.ashokitservices.com")
+
+        for r in rows:
+            person_id, required_price, underpaid_since, _, email = r
+            from datetime import datetime as _dt
+            lock_date = (_dt.strptime(underpaid_since, "%Y-%m-%d") + timedelta(days=30)).strftime("%d %b %Y")
+
+            msg = MIMEText(
+                f"Hi,\n\n"
+                f"This is a reminder that your ArthaDesk subscription needs to be upgraded.\n"
+                f"Your required plan price is ₹{required_price:,}/year.\n\n"
+                f"Your Capital Gains and Tax features will be locked on {lock_date}.\n\n"
+                f"Upgrade here: {base_url}/subscribe.html\n\n"
+                f"— ArthaDesk Team",
+                "plain",
+            )
+            msg["Subject"] = f"Reminder: ArthaDesk subscription upgrade due {lock_date}"
+            msg["From"]    = from_email
+            msg["To"]      = email
+
+            try:
+                with smtplib.SMTP(smtp_host, smtp_port) as s:
+                    s.starttls()
+                    s.login(smtp_user, smtp_pass)
+                    s.send_message(msg)
+                db.execute(
+                    _text("UPDATE underpaid_users SET last_reminder_at=datetime('now') WHERE person_id=:pid"),
+                    {"pid": person_id},
+                )
+                db.commit()
+            except Exception:
+                pass
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup ---
@@ -57,6 +123,8 @@ async def lifespan(app: FastAPI):
     from apscheduler.schedulers.background import BackgroundScheduler
     _scheduler = BackgroundScheduler()
     _scheduler.add_job(_cancel_expired_declined_subscriptions, "interval", hours=1)
+    # 09:00 IST = 03:30 UTC
+    _scheduler.add_job(_send_underpaid_reminders, "cron", hour=3, minute=30)
     _scheduler.start()
 
     logger.info("Server started — all cron jobs disabled, use /admin/* endpoints to trigger manually")
@@ -70,6 +138,7 @@ app = FastAPI(title="Portfolio Tracker Server", version="0.1.0", lifespan=lifesp
 
 app.include_router(auth_router.router,      prefix="/auth",           tags=["auth"])
 app.include_router(subs_router.router,      prefix="/subscriptions",  tags=["subscriptions"])
+app.include_router(persons_router.router,   prefix="/persons",        tags=["persons"])
 app.include_router(instruments.router,      prefix="/instruments",    tags=["instruments"])
 app.include_router(prices.router,           prefix="/prices",         tags=["prices"])
 app.include_router(bhavcopy_router.router,  prefix="/admin/bhavcopy", tags=["bhavcopy"])

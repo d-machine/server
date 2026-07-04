@@ -11,168 +11,213 @@
   <nav class="bg-white border-b">
     <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
       <a href="index.html" class="font-bold text-lg">Portfolio Tracker</a>
-      <a href="account.html" class="text-sm text-gray-500 hover:text-gray-800">My Account</a>
+      <div class="flex items-center gap-4">
+        <a href="pricing.html" class="text-sm text-gray-600 hover:text-gray-900">Pricing</a>
+        <a href="account.html" class="text-sm text-gray-500 hover:text-gray-800">My Account</a>
+      </div>
     </div>
   </nav>
 
-  <div class="max-w-4xl mx-auto px-4 py-12">
-    <h1 class="text-3xl font-bold text-center mb-2">Choose a Plan</h1>
-    <p class="text-center text-gray-500 mb-10">Pay via UPI, upload your payment screenshot, and get access after verification (usually within a few hours).</p>
+  <div class="max-w-3xl mx-auto px-4 py-12">
+    <h1 class="text-3xl font-bold text-center mb-2">Submit Payment</h1>
+    <p class="text-center text-gray-500 mb-10">Pay via UPI, select the portfolio accounts this payment covers, and upload your screenshot for verification.</p>
 
-    <!-- UPI QR -->
-    <div class="bg-white rounded-2xl shadow p-6 mb-8 flex flex-col sm:flex-row items-center gap-6">
-      <div class="text-center">
+    <div id="error-banner" class="hidden bg-red-50 text-red-700 text-sm rounded-xl px-4 py-3 mb-6"></div>
+    <div id="success-banner" class="hidden bg-green-50 text-green-700 text-sm rounded-xl px-4 py-3 mb-6"></div>
+
+    <!-- UPI Payment info -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6 flex flex-col sm:flex-row items-center gap-6">
+      <div class="text-center shrink-0">
         <p class="text-sm font-medium text-gray-600 mb-2">Scan to Pay (UPI)</p>
-        <!-- Replace with actual UPI QR image -->
-        <div class="w-40 h-40 bg-gray-100 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center text-gray-400 text-xs text-center p-2">
-          UPI QR<br>Code Here<br><span class="text-[10px]">(replace with actual QR image)</span>
+        <div class="w-36 h-36 bg-gray-100 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center text-gray-400 text-xs text-center p-2">
+          UPI QR<br>Code Here
         </div>
         <p class="text-xs text-gray-500 mt-2">UPI ID: <span class="font-mono font-medium">yourname@upi</span></p>
       </div>
-      <div class="flex-1 text-sm text-gray-600 space-y-2">
-        <p class="font-medium text-gray-800">How to subscribe:</p>
-        <ol class="list-decimal list-inside space-y-1">
-          <li>Select a plan below</li>
-          <li>Pay the amount via UPI (scan QR or use UPI ID)</li>
-          <li>Take a screenshot of the payment confirmation</li>
-          <li>Upload the screenshot below</li>
-          <li>Your subscription will be activated after manual verification</li>
+      <div class="flex-1 text-sm text-gray-600 space-y-1">
+        <p class="font-medium text-gray-800 mb-2">How it works:</p>
+        <ol class="list-decimal list-inside space-y-1.5">
+          <li>Upload your payment screenshot below</li>
+          <li>Select the portfolio accounts this payment covers</li>
+          <li>Edit amounts if needed (e.g. for gains-adjusted pricing)</li>
+          <li>Submit — we'll verify and activate within a few hours</li>
         </ol>
+        <p class="pt-2 text-xs text-gray-400">Base price: ₹1,000/year per account. <a href="pricing.html" class="text-blue-600 hover:underline">View pricing details →</a></p>
       </div>
     </div>
 
-    <!-- Plan cards -->
-    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-      <label class="plan-card cursor-pointer" data-plan="MONTH" data-price="₹99">
-        <input type="radio" name="plan" value="MONTH" class="hidden">
-        <div class="bg-white rounded-2xl shadow p-5 border-2 border-transparent hover:border-blue-500 transition-colors">
-          <div class="font-semibold mb-1">Monthly</div>
-          <div class="text-2xl font-bold text-blue-600">₹99</div>
-          <div class="text-xs text-gray-400 mt-1">/ month</div>
-        </div>
-      </label>
-      <label class="plan-card cursor-pointer" data-plan="QUARTER" data-price="₹249">
-        <input type="radio" name="plan" value="QUARTER" class="hidden">
-        <div class="bg-white rounded-2xl shadow p-5 border-2 border-transparent hover:border-blue-500 transition-colors">
-          <div class="font-semibold mb-1">Quarterly</div>
-          <div class="text-2xl font-bold text-blue-600">₹249</div>
-          <div class="text-xs text-gray-400 mt-1">/ 3 months</div>
-          <div class="text-xs text-green-600 mt-1">Save ₹48</div>
-        </div>
-      </label>
-      <label class="plan-card cursor-pointer" data-plan="SEMESTER" data-price="₹449">
-        <input type="radio" name="plan" value="SEMESTER" class="hidden">
-        <div class="bg-white rounded-2xl shadow p-5 border-2 border-transparent hover:border-blue-500 transition-colors">
-          <div class="font-semibold mb-1">Half-Yearly</div>
-          <div class="text-2xl font-bold text-blue-600">₹449</div>
-          <div class="text-xs text-gray-400 mt-1">/ 6 months</div>
-          <div class="text-xs text-green-600 mt-1">Save ₹145</div>
-        </div>
-      </label>
-      <label class="plan-card cursor-pointer" data-plan="YEAR" data-price="₹799">
-        <input type="radio" name="plan" value="YEAR" class="hidden">
-        <div class="bg-white rounded-2xl shadow p-5 border-2 border-transparent hover:border-blue-500 relative">
-          <div class="absolute -top-2 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">Best value</div>
-          <div class="font-semibold mb-1">Yearly</div>
-          <div class="text-2xl font-bold text-blue-600">₹799</div>
-          <div class="text-xs text-gray-400 mt-1">/ year</div>
-          <div class="text-xs text-green-600 mt-1">Save ₹389</div>
-        </div>
-      </label>
-    </div>
-
-    <!-- Upload form -->
-    <div class="bg-white rounded-2xl shadow p-6">
-      <div id="upload-error" class="hidden bg-red-50 text-red-700 text-sm rounded-lg px-4 py-3 mb-4"></div>
-      <div id="upload-success" class="hidden bg-green-50 text-green-700 text-sm rounded-lg px-4 py-3 mb-4"></div>
-
-      <div id="selected-plan-info" class="text-sm text-gray-600 mb-4 hidden">
-        Selected: <span id="plan-label" class="font-semibold text-gray-900"></span>
-        — Pay <span id="plan-price" class="font-semibold text-blue-600"></span>
-      </div>
-
-      <label class="block text-sm font-medium mb-2">Upload payment screenshot</label>
-      <div class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-blue-400 transition-colors" id="drop-zone">
+    <!-- Step 1: Screenshot upload -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
+      <h2 class="font-semibold mb-4">1. Upload payment screenshot</h2>
+      <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-blue-400 transition-colors">
         <input type="file" id="screenshot-file" accept="image/*" class="hidden">
         <div id="file-label" class="text-gray-400 text-sm">
           <div class="text-3xl mb-2">📸</div>
-          Click to select or drag & drop your screenshot
+          Click to select or drag &amp; drop your screenshot
         </div>
       </div>
-
-      <button id="submit-btn" disabled
-        class="mt-4 w-full bg-blue-600 text-white rounded-xl py-3 font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed">
-        Submit for Verification
-      </button>
     </div>
+
+    <!-- Step 2: Person selection grid (shown after file selected) -->
+    <div id="persons-section" class="hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
+      <h2 class="font-semibold mb-1">2. Select portfolio accounts this payment covers</h2>
+      <p class="text-sm text-gray-500 mb-4">Check the accounts included in this payment and confirm the amount for each.</p>
+
+      <div id="no-persons-msg" class="hidden text-sm text-gray-500 py-4 text-center">
+        No portfolio accounts registered yet.
+        <a href="account.html" class="text-blue-600 hover:underline">Register a person on My Account →</a>
+      </div>
+
+      <div id="persons-grid" class="space-y-3"></div>
+
+      <div class="mt-5 pt-4 border-t flex items-center justify-between text-sm">
+        <span class="text-gray-500">Total payment</span>
+        <span id="total-amount" class="font-bold text-lg text-gray-900">₹0</span>
+      </div>
+    </div>
+
+    <button id="submit-btn" disabled
+      class="w-full bg-blue-600 text-white rounded-xl py-3 font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed">
+      Submit for Verification
+    </button>
   </div>
 
   <script>
     const token = sessionStorage.getItem('access_token');
     if (!token) window.location.href = 'auth.html';
 
-    let selectedPlan = null;
     let selectedFile = null;
+    let persons = [];
 
-    // Plan selection
-    document.querySelectorAll('.plan-card').forEach(card => {
-      card.addEventListener('click', () => {
-        document.querySelectorAll('.plan-card > div').forEach(d => d.classList.remove('border-blue-500'));
-        card.querySelector('div').classList.add('border-blue-500');
-        selectedPlan = card.dataset.plan;
-        document.getElementById('plan-label').textContent = card.querySelector('.font-semibold').textContent;
-        document.getElementById('plan-price').textContent = card.dataset.price;
-        document.getElementById('selected-plan-info').classList.remove('hidden');
-        card.querySelector('input').checked = true;
-        updateSubmitBtn();
-      });
-    });
-
-    // File input
+    // ── File upload ───────────────────────────────────────────────────────────
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('screenshot-file');
     dropZone.addEventListener('click', () => fileInput.click());
-    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-blue-400'); });
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('border-blue-400'); });
     dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-blue-400'));
-    dropZone.addEventListener('drop', (e) => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); });
+    dropZone.addEventListener('drop', e => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); });
     fileInput.addEventListener('change', () => handleFile(fileInput.files[0]));
 
     function handleFile(file) {
       if (!file) return;
       selectedFile = file;
-      document.getElementById('file-label').innerHTML = `<div class="text-green-600 font-medium">${file.name}</div><div class="text-xs text-gray-400 mt-1">${(file.size/1024).toFixed(0)} KB</div>`;
+      document.getElementById('file-label').innerHTML =
+        `<div class="text-green-600 font-medium">✓ ${file.name}</div>` +
+        `<div class="text-xs text-gray-400 mt-1">${(file.size/1024).toFixed(0)} KB</div>`;
+      loadPersons();
+    }
+
+    // ── Load persons from server ──────────────────────────────────────────────
+    async function loadPersons() {
+      try {
+        const res = await fetch('/persons', { headers: { Authorization: `Bearer ${token}` } });
+        if (res.status === 401) { window.location.href = 'auth.html'; return; }
+        persons = await res.json();
+        renderPersons();
+        document.getElementById('persons-section').classList.remove('hidden');
+      } catch {
+        showError('Could not load portfolio accounts. Please try again.');
+      }
+    }
+
+    function renderPersons() {
+      const grid = document.getElementById('persons-grid');
+      const noMsg = document.getElementById('no-persons-msg');
+      if (!persons.length) { noMsg.classList.remove('hidden'); return; }
+
+      grid.innerHTML = persons.map((p, i) => {
+        const statusBadge = p.subscription_status === 'ACTIVE'
+          ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Active</span>'
+          : p.subscription_status === 'PENDING_APPROVAL'
+            ? '<span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Pending</span>'
+            : '<span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">No subscription</span>';
+
+        return `
+          <div class="flex items-center gap-4 border border-gray-200 rounded-xl px-4 py-3">
+            <input type="checkbox" id="person-${i}" data-person-id="${p.person_id}"
+              class="person-check w-4 h-4 text-blue-600 rounded cursor-pointer"
+              onchange="onPersonToggle(this, ${i})">
+            <label for="person-${i}" class="flex-1 cursor-pointer">
+              <div class="font-medium text-gray-900">${p.display_name}</div>
+              <div class="flex items-center gap-2 mt-0.5">${statusBadge}</div>
+            </label>
+            <div class="flex items-center gap-1">
+              <span class="text-gray-400 text-sm">₹</span>
+              <input type="number" id="amount-${i}" value="1000" min="1"
+                class="person-amount w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-right disabled:bg-gray-50 disabled:text-gray-400"
+                disabled
+                oninput="updateTotal()">
+            </div>
+          </div>`;
+      }).join('');
+
+      updateTotal();
+    }
+
+    function onPersonToggle(cb, i) {
+      const amountInput = document.getElementById(`amount-${i}`);
+      amountInput.disabled = !cb.checked;
+      updateTotal();
       updateSubmitBtn();
     }
 
-    function updateSubmitBtn() {
-      document.getElementById('submit-btn').disabled = !(selectedPlan && selectedFile);
+    function updateTotal() {
+      let total = 0;
+      document.querySelectorAll('.person-check:checked').forEach(cb => {
+        const i = cb.id.split('-')[1];
+        const amt = parseInt(document.getElementById(`amount-${i}`).value) || 0;
+        total += amt;
+      });
+      document.getElementById('total-amount').textContent = '₹' + total.toLocaleString('en-IN');
     }
 
+    function updateSubmitBtn() {
+      const hasFile = !!selectedFile;
+      const hasPersons = document.querySelectorAll('.person-check:checked').length > 0;
+      document.getElementById('submit-btn').disabled = !(hasFile && hasPersons);
+    }
+
+    // ── Submit ────────────────────────────────────────────────────────────────
     document.getElementById('submit-btn').addEventListener('click', async () => {
-      document.getElementById('upload-error').classList.add('hidden');
+      hideMessages();
       const btn = document.getElementById('submit-btn');
       btn.disabled = true; btn.textContent = 'Uploading…';
 
+      const personsPayload = [];
+      document.querySelectorAll('.person-check:checked').forEach(cb => {
+        const i = cb.id.split('-')[1];
+        personsPayload.push({
+          person_id: parseInt(cb.dataset.personId),
+          amount: parseInt(document.getElementById(`amount-${i}`).value) || 1000,
+        });
+      });
+
       const form = new FormData();
-      form.append('plan', selectedPlan);
+      form.append('persons', JSON.stringify(personsPayload));
       form.append('screenshot', selectedFile);
 
       try {
         const res = await fetch('/subscriptions/submit', {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
-          body: form
+          body: form,
         });
-        if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Upload failed'); }
-        document.getElementById('upload-success').textContent = '✅ Screenshot submitted! Verification usually takes a few hours. You'll receive an email once your subscription is activated.';
-        document.getElementById('upload-success').classList.remove('hidden');
+        if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Submission failed'); }
+        showSuccess('✅ Screenshot submitted! Verification usually takes a few hours. You\'ll receive an email once your subscription is activated.');
         btn.textContent = 'Submitted';
       } catch (err) {
-        document.getElementById('upload-error').textContent = err.message;
-        document.getElementById('upload-error').classList.remove('hidden');
+        showError(err.message);
         btn.disabled = false; btn.textContent = 'Submit for Verification';
+        updateSubmitBtn();
       }
     });
+
+    function showError(msg) { const el = document.getElementById('error-banner'); el.textContent = msg; el.classList.remove('hidden'); }
+    function showSuccess(msg) { const el = document.getElementById('success-banner'); el.textContent = msg; el.classList.remove('hidden'); }
+    function hideMessages() {
+      document.getElementById('error-banner').classList.add('hidden');
+      document.getElementById('success-banner').classList.add('hidden');
+    }
   </script>
 </body>
 </html>

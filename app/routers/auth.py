@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.auth_db import get_auth_db
-from app.routers.deps import JWT_ALGORITHM, JWT_SECRET, get_current_user
+from app.routers.deps import JWT_ALGORITHM, JWT_SECRET, get_current_user, require_admin
 
 router = APIRouter()
 
@@ -70,7 +70,7 @@ def _store_refresh_token(auth_db: Session, user_id: int, raw_token: str) -> int:
 def _subscription_info(auth_db: Session, user_id: int) -> dict | None:
     row = auth_db.execute(
         text("""
-            SELECT plan, status, expires_at, submitted_at
+            SELECT plan, status, expires_at
             FROM subscriptions
             WHERE user_id = :uid
             ORDER BY created_at DESC LIMIT 1
@@ -79,7 +79,7 @@ def _subscription_info(auth_db: Session, user_id: int) -> dict | None:
     ).fetchone()
     if not row:
         return None
-    return {"plan": row[0], "status": row[1], "expires_at": row[2], "submitted_at": row[3]}
+    return {"plan": row[0], "status": row[1], "expires_at": row[2]}
 
 
 def _send_email(to: str, subject: str, body: str):
@@ -130,6 +130,12 @@ class ResetPasswordRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@router.get("/admin/check")
+def admin_check(_: None = Depends(require_admin)):
+    """Lightweight endpoint for admin panel login verification."""
+    return {"ok": True}
+
 
 @router.post("/register", status_code=201)
 def register(req: RegisterRequest, auth_db: Session = Depends(get_auth_db)):

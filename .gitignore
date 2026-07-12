@@ -46,3 +46,7 @@ errors/*
 # inbox
 inbox/
 
+# website-admin (Vite/React build)
+website-admin/node_modules/
+website-admin/dist/
+

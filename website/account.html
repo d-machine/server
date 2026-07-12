@@ -3,67 +3,71 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>My Account — Portfolio Tracker</title>
+  <title>My Account — ArthaDesk</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="config.js"></script>
+  <style>
+    body { background: #f1f5f9; }
+  </style>
 </head>
-<body class="min-h-screen bg-gray-50">
+<body class="min-h-screen">
 
-  <nav class="bg-white border-b">
-    <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-      <a href="index.html" class="font-bold text-lg">Portfolio Tracker</a>
-      <div class="flex items-center gap-4">
-        <a href="pricing.html" class="text-sm text-gray-600 hover:text-gray-900">Pricing</a>
-        <span id="nav-email" class="text-sm text-gray-500"></span>
-        <button onclick="logout()" class="text-sm text-red-500 hover:text-red-700">Logout</button>
-      </div>
-    </div>
-  </nav>
+  <nav id="navbar"></nav>
+  <script src="navbar.js"></script>
 
-  <div class="max-w-2xl mx-auto px-4 py-12">
-    <h1 class="text-2xl font-bold mb-8">My Account</h1>
+  <div class="max-w-2xl mx-auto px-4 py-10">
+    <h1 class="text-2xl font-bold text-gray-900 mb-6">My Account</h1>
 
-    <!-- Portfolio Accounts (Persons) -->
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="font-semibold text-lg">Portfolio Accounts</h2>
-        <button id="add-person-btn" onclick="toggleAddForm()"
-          class="text-sm bg-blue-600 text-white rounded-lg px-3 py-1.5 hover:bg-blue-700">
-          + Add Person
-        </button>
+    <!-- Portfolio Accounts -->
+    <div class="bg-white rounded-3xl shadow-[0_0_12px_rgb(0,0,0,0.20)] border border-gray-200 mb-5 overflow-hidden">
+      <!-- Card header -->
+      <div class="flex items-center justify-between px-6 py-4" style="background:#e9edf2;border-bottom:1px solid #d1d5db;">
+        <h2 class="font-semibold text-gray-900">Portfolio Accounts</h2>
+        <div class="flex items-center gap-2">
+          <a href="/history" class="text-sm border border-blue-600 text-blue-600 rounded-xl px-3 py-1.5 hover:bg-blue-50 transition-colors">History</a>
+          <a href="/subscribe" class="text-sm border border-blue-600 text-blue-600 rounded-xl px-3 py-1.5 hover:bg-blue-50 transition-colors">Submit payment</a>
+          <button onclick="toggleAddForm()"
+            class="text-sm bg-blue-600 text-white rounded-xl px-3 py-1.5 hover:bg-blue-700 transition-colors">
+            + Add Person
+          </button>
+        </div>
       </div>
 
-      <div id="persons-loading" class="text-gray-400 text-sm">Loading…</div>
-      <div id="persons-list" class="space-y-3"></div>
-      <div id="persons-empty" class="hidden text-sm text-gray-500 py-2">
-        No portfolio accounts registered yet. Add a person to get started.
+      <!-- Person list -->
+      <div class="px-6">
+        <div id="persons-loading" class="text-gray-400 text-sm py-4">Loading…</div>
+        <div id="persons-list"></div>
+        <div id="persons-empty" class="hidden text-sm text-gray-400 py-6 text-center">
+          No portfolio accounts yet. Add a person to get started.
+        </div>
       </div>
 
-      <!-- Add person form (hidden by default) -->
-      <div id="add-person-form" class="hidden mt-5 pt-5 border-t">
-        <h3 class="font-medium text-gray-800 mb-4">Register a portfolio account</h3>
-        <div id="add-person-error" class="hidden bg-red-50 text-red-700 text-sm rounded-lg px-4 py-3 mb-4"></div>
-        <div id="add-person-success" class="hidden bg-green-50 text-green-700 text-sm rounded-lg px-4 py-3 mb-4"></div>
+      <!-- Add person form -->
+      <div id="add-person-form" class="hidden border-t border-gray-100 px-6 py-5 bg-gray-50/60">
+        <h3 class="font-medium text-gray-800 mb-4 text-sm">Register a portfolio account</h3>
+        <div id="add-person-error" class="hidden bg-red-50 text-red-700 text-sm rounded-xl px-4 py-3 mb-4 border border-red-200"></div>
+        <div id="add-person-success" class="hidden bg-green-50 text-green-700 text-sm rounded-xl px-4 py-3 mb-4 border border-green-200"></div>
 
         <div class="space-y-3">
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Display name</label>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Display name</label>
             <input id="new-display-name" type="text" placeholder="e.g. Sumit Khaitan"
-              class="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              class="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">PAN number</label>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">PAN number</label>
             <input id="new-pan" type="text" placeholder="ABCDE1234F" maxlength="10"
-              class="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm uppercase bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               oninput="this.value=this.value.toUpperCase()">
             <p class="text-xs text-gray-400 mt-1">Your PAN stays on your device — only a secure hash is sent to the server.</p>
           </div>
-          <div class="flex gap-3 pt-1">
+          <div class="flex gap-2 pt-1">
             <button onclick="submitAddPerson()"
-              class="bg-blue-600 text-white rounded-xl px-5 py-2.5 text-sm font-medium hover:bg-blue-700">
+              class="bg-blue-600 text-white rounded-xl px-5 py-2.5 text-sm font-medium hover:bg-blue-700 transition-colors">
               Register
             </button>
             <button onclick="toggleAddForm()"
-              class="border border-gray-300 rounded-xl px-5 py-2.5 text-sm font-medium hover:bg-gray-50">
+              class="border border-gray-300 rounded-xl px-5 py-2.5 text-sm font-medium hover:bg-gray-100 transition-colors">
               Cancel
             </button>
           </div>
@@ -71,189 +75,24 @@
       </div>
     </div>
 
-    <!-- Subscription status per person -->
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="font-semibold text-lg">Subscriptions</h2>
-        <a href="subscribe.html" class="text-sm text-blue-600 hover:underline">Submit payment →</a>
-      </div>
-      <div id="sub-loading" class="text-gray-400 text-sm">Loading…</div>
-      <div id="sub-list" class="space-y-3"></div>
-      <div id="sub-empty" class="hidden text-sm text-gray-500 py-2">
-        No subscription history. <a href="subscribe.html" class="text-blue-600 hover:underline">Subscribe now →</a>
-      </div>
-    </div>
-
     <!-- Account info -->
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-      <h2 class="font-semibold text-lg mb-4">Account</h2>
-      <div class="text-sm space-y-2">
-        <div class="flex justify-between"><span class="text-gray-500">Email</span><span id="acc-email" class="font-medium"></span></div>
-        <div class="flex justify-between"><span class="text-gray-500">Name</span><span id="acc-name" class="font-medium"></span></div>
+    <div class="bg-white rounded-3xl shadow-[0_0_12px_rgb(0,0,0,0.20)] border border-gray-200 overflow-hidden">
+      <div class="px-6 py-4" style="background:#e9edf2;border-bottom:1px solid #d1d5db;">
+        <h2 class="font-semibold text-gray-900">Account</h2>
+      </div>
+      <div class="px-6 py-4 space-y-3 text-sm">
+        <div class="flex justify-between items-center bg-gray-50 rounded-2xl px-4 py-3">
+          <span class="text-gray-500">Email</span>
+          <span id="acc-email" class="font-medium text-gray-900"></span>
+        </div>
+        <div class="flex justify-between items-center bg-gray-50 rounded-2xl px-4 py-3">
+          <span class="text-gray-500">Name</span>
+          <span id="acc-name" class="font-medium text-gray-900"></span>
+        </div>
       </div>
     </div>
   </div>
 
-  <script>
-    const token = sessionStorage.getItem('access_token');
-    if (!token) window.location.href = 'auth.html';
-
-    document.getElementById('nav-email').textContent = sessionStorage.getItem('email') || '';
-
-    let panSalt = '';
-
-    const STATUS_STYLES = {
-      ACTIVE:           'bg-green-100 text-green-700',
-      PENDING_APPROVAL: 'bg-yellow-100 text-yellow-700',
-      DECLINED:         'bg-red-100 text-red-700',
-      CANCELLED:        'bg-gray-100 text-gray-500',
-      EXPIRED:          'bg-gray-100 text-gray-500',
-    };
-
-    // ── Load all data ─────────────────────────────────────────────────────────
-    async function load() {
-      try {
-        const [meRes, personsRes, subRes] = await Promise.all([
-          fetch('/auth/me',              { headers: { Authorization: `Bearer ${token}` } }),
-          fetch('/persons',              { headers: { Authorization: `Bearer ${token}` } }),
-          fetch('/subscriptions/status', { headers: { Authorization: `Bearer ${token}` } }),
-        ]);
-        if (meRes.status === 401 || personsRes.status === 401) { window.location.href = 'auth.html'; return; }
-
-        const me      = await meRes.json();
-        const persons = await personsRes.json();
-        const sub     = await subRes.json();
-
-        panSalt = me.pan_salt || '';
-        document.getElementById('acc-email').textContent = me.email;
-        document.getElementById('acc-name').textContent  = me.name;
-
-        renderPersons(persons);
-        renderSubscriptions(sub);
-      } catch {
-        document.getElementById('persons-loading').textContent = 'Failed to load. Please refresh.';
-      }
-    }
-
-    function renderPersons(persons) {
-      document.getElementById('persons-loading').classList.add('hidden');
-      const list = document.getElementById('persons-list');
-      if (!persons.length) {
-        document.getElementById('persons-empty').classList.remove('hidden');
-        return;
-      }
-      list.innerHTML = persons.map(p => {
-        const statusText = p.subscription_status
-          ? `<span class="text-xs px-2 py-0.5 rounded-full ${STATUS_STYLES[p.subscription_status] || 'bg-gray-100 text-gray-500'}">${p.subscription_status.replace('_', ' ')}</span>`
-          : '<span class="text-xs text-gray-400">No subscription</span>';
-        return `
-          <div class="flex items-center justify-between border border-gray-200 rounded-xl px-4 py-3">
-            <div>
-              <div class="font-medium text-gray-900">${p.display_name}</div>
-              <div class="mt-0.5">${statusText}</div>
-            </div>
-            <a href="subscribe.html" class="text-xs text-blue-600 hover:underline">
-              ${p.subscription_status === 'ACTIVE' ? 'Renew' : 'Subscribe'}
-            </a>
-          </div>`;
-      }).join('');
-    }
-
-    function renderSubscriptions(sub) {
-      document.getElementById('sub-loading').classList.add('hidden');
-      const list = document.getElementById('sub-list');
-      if (!sub.has_subscription || !sub.persons?.length) {
-        document.getElementById('sub-empty').classList.remove('hidden');
-        return;
-      }
-      list.innerHTML = sub.persons.map(p => {
-        const style = STATUS_STYLES[p.status] || 'bg-gray-100 text-gray-500';
-        const expiryText = p.expires_at
-          ? `Expires ${p.expires_at.slice(0, 10)}`
-          : p.status === 'PENDING_APPROVAL' ? 'Awaiting verification' : '';
-        const declineHtml = p.status === 'DECLINED' ? `
-          <div class="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
-            <p class="font-medium mb-1">Declined: ${p.decline_reason || ''}</p>
-            <a href="subscribe.html" class="text-blue-600 hover:underline">Upload a corrected screenshot →</a>
-          </div>` : '';
-        return `
-          <div class="border border-gray-200 rounded-xl px-4 py-3">
-            <div class="flex items-center justify-between">
-              <div class="font-medium text-gray-900">${p.display_name}</div>
-              <span class="text-xs px-2 py-0.5 rounded-full ${style}">${p.status.replace('_', ' ')}</span>
-            </div>
-            <div class="text-xs text-gray-400 mt-0.5">${expiryText}${p.paid_price ? ` · ₹${p.paid_price.toLocaleString('en-IN')} paid` : ''}</div>
-            ${declineHtml}
-          </div>`;
-      }).join('');
-    }
-
-    // ── Add person form ───────────────────────────────────────────────────────
-    function toggleAddForm() {
-      const form = document.getElementById('add-person-form');
-      form.classList.toggle('hidden');
-      document.getElementById('add-person-error').classList.add('hidden');
-      document.getElementById('add-person-success').classList.add('hidden');
-    }
-
-    async function hashPAN(pan) {
-      const combined = pan.toUpperCase().trim() + panSalt;
-      const buf = await crypto.subtle.digest('SHA-512', new TextEncoder().encode(combined));
-      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-    }
-
-    function maskedPAN(pan) {
-      pan = pan.toUpperCase().trim();
-      if (pan.length !== 10) return null;
-      return pan.slice(0, 5) + '****' + pan.slice(9);
-    }
-
-    async function submitAddPerson() {
-      document.getElementById('add-person-error').classList.add('hidden');
-      document.getElementById('add-person-success').classList.add('hidden');
-
-      const displayName = document.getElementById('new-display-name').value.trim();
-      const pan         = document.getElementById('new-pan').value.trim().toUpperCase();
-
-      if (!displayName) { showAddError('Please enter a display name.'); return; }
-      if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) { showAddError('Please enter a valid PAN (e.g. ABCDE1234F).'); return; }
-
-      const masked = maskedPAN(pan);
-      const panHash = await hashPAN(pan);
-
-      try {
-        const res = await fetch('/persons', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pan_hash: panHash, masked_pan: masked, display_name: displayName }),
-        });
-        if (res.status === 409) { showAddError('This PAN is already registered under your account.'); return; }
-        if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Registration failed'); }
-        document.getElementById('add-person-success').textContent = `${displayName} registered successfully.`;
-        document.getElementById('add-person-success').classList.remove('hidden');
-        document.getElementById('new-display-name').value = '';
-        document.getElementById('new-pan').value = '';
-        // Reload page data
-        load();
-      } catch (err) {
-        showAddError(err.message);
-      }
-    }
-
-    function showAddError(msg) {
-      const el = document.getElementById('add-person-error');
-      el.textContent = msg;
-      el.classList.remove('hidden');
-    }
-
-    function logout() {
-      const rt = sessionStorage.getItem('refresh_token');
-      if (rt) fetch('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: rt }) }).catch(() => {});
-      sessionStorage.clear();
-      window.location.href = 'auth.html';
-    }
-
-    load();
-  </script>
+  <script src="js/account.js"></script>
 </body>
 </html>

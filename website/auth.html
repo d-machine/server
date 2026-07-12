@@ -3,22 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login / Register — Portfolio Tracker</title>
+  <title>Login / Register — ArthaDesk</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="config.js"></script>
+  <style>body { background: #f1f5f9; }</style>
 </head>
-<body class="min-h-screen bg-gray-50 flex flex-col">
+<body class="min-h-screen flex flex-col">
 
-  <nav class="bg-white border-b">
-    <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-      <a href="index.html" class="font-bold text-lg">Portfolio Tracker</a>
-      <a href="pricing.html" class="text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5">Pricing</a>
-    </div>
-  </nav>
+  <nav id="navbar"></nav>
+  <script src="navbar.js"></script>
 
   <div class="flex-1 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow p-8 w-full max-w-md">
 
-      <!-- Tabs -->
+      <!-- Login -->
       <div id="view-login" class="">
         <h1 class="text-xl font-semibold mb-1">Welcome back</h1>
         <p class="text-sm text-gray-500 mb-6">Login to your account</p>
@@ -30,12 +28,12 @@
           <div>
             <label class="block text-sm font-medium mb-1">Email</label>
             <input type="email" id="login-email" required
-              class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
           </div>
           <div>
             <label class="block text-sm font-medium mb-1">Password</label>
             <input type="password" id="login-password" required
-              class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
           </div>
           <button type="submit"
             class="w-full bg-blue-600 text-white rounded-lg py-2.5 font-medium hover:bg-blue-700 disabled:opacity-50">
@@ -62,7 +60,7 @@
           <div>
             <label class="block text-sm font-medium mb-1">Email</label>
             <input type="email" id="forgot-email" required
-              class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
           </div>
           <button type="submit"
             class="w-full bg-blue-600 text-white rounded-lg py-2.5 font-medium hover:bg-blue-700">
@@ -82,22 +80,22 @@
           <div>
             <label class="block text-sm font-medium mb-1">Full Name</label>
             <input type="text" id="reg-name" required
-              class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
           </div>
           <div>
             <label class="block text-sm font-medium mb-1">Email</label>
             <input type="email" id="reg-email" required
-              class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
           </div>
           <div>
             <label class="block text-sm font-medium mb-1">Password</label>
             <input type="password" id="reg-password" required minlength="8"
-              class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
           </div>
           <div>
             <label class="block text-sm font-medium mb-1">Confirm Password</label>
             <input type="password" id="reg-confirm" required
-              class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
           </div>
           <button type="submit"
             class="w-full bg-blue-600 text-white rounded-lg py-2.5 font-medium hover:bg-blue-700">
@@ -112,94 +110,6 @@
     </div>
   </div>
 
-  <script>
-    function showLogin()    { document.getElementById('view-login').classList.remove('hidden'); document.getElementById('view-register').classList.add('hidden'); document.getElementById('view-forgot').classList.add('hidden'); }
-    function showRegister() { document.getElementById('view-register').classList.remove('hidden'); document.getElementById('view-login').classList.add('hidden'); document.getElementById('view-forgot').classList.add('hidden'); }
-    function showForgot()   { document.getElementById('view-forgot').classList.remove('hidden'); document.getElementById('view-login').classList.add('hidden'); document.getElementById('view-register').classList.add('hidden'); }
-
-    function showError(id, msg) { const el = document.getElementById(id); el.textContent = msg; el.classList.remove('hidden'); }
-    function hideError(id)      { document.getElementById(id).classList.add('hidden'); }
-    function showSuccess(id, msg) { const el = document.getElementById(id); el.textContent = msg; el.classList.remove('hidden'); }
-
-    // Route based on hash
-    if (location.hash === '#register') showRegister();
-    else if (location.hash === '#forgot') showForgot();
-
-    // Login
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      hideError('login-error');
-      const btn = e.target.querySelector('button[type=submit]');
-      btn.disabled = true; btn.textContent = 'Logging in…';
-      try {
-        const res = await fetch('/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: document.getElementById('login-email').value, password: document.getElementById('login-password').value })
-        });
-        if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Login failed'); }
-        const data = await res.json();
-        sessionStorage.setItem('access_token', data.access_token);
-        sessionStorage.setItem('refresh_token', data.refresh_token);
-        sessionStorage.setItem('email', document.getElementById('login-email').value);
-        window.location.href = 'account.html';
-      } catch (err) {
-        showError('login-error', err.message);
-        btn.disabled = false; btn.textContent = 'Login';
-      }
-    });
-
-    // Forgot password
-    document.getElementById('forgot-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      hideError('forgot-error');
-      const btn = e.target.querySelector('button[type=submit]');
-      btn.disabled = true; btn.textContent = 'Sending…';
-      try {
-        await fetch('/auth/forgot-password', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: document.getElementById('forgot-email').value })
-        });
-        showSuccess('forgot-success', 'If this email is registered, a reset link has been sent. Check your inbox.');
-      } catch {
-        showError('forgot-error', 'Something went wrong. Please try again.');
-      } finally {
-        btn.disabled = false; btn.textContent = 'Send reset link';
-      }
-    });
-
-    // Register
-    document.getElementById('register-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      hideError('register-error');
-      const pw = document.getElementById('reg-password').value;
-      if (pw !== document.getElementById('reg-confirm').value) { showError('register-error', 'Passwords do not match'); return; }
-      const btn = e.target.querySelector('button[type=submit]');
-      btn.disabled = true; btn.textContent = 'Creating account…';
-      try {
-        const res = await fetch('/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: document.getElementById('reg-name').value, email: document.getElementById('reg-email').value, password: pw })
-        });
-        if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Registration failed'); }
-        // Auto-login
-        const login = await fetch('/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: document.getElementById('reg-email').value, password: pw })
-        });
-        const data = await login.json();
-        sessionStorage.setItem('access_token', data.access_token);
-        sessionStorage.setItem('refresh_token', data.refresh_token);
-        sessionStorage.setItem('email', document.getElementById('reg-email').value);
-        window.location.href = 'subscribe.html';
-      } catch (err) {
-        showError('register-error', err.message);
-        btn.disabled = false; btn.textContent = 'Create Account';
-      }
-    });
-  </script>
+  <script src="js/auth.js"></script>
 </body>
 </html>

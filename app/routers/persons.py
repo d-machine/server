@@ -1,4 +1,5 @@
 import json
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.auth_db import get_auth_db
 from app.crypto import encrypt_for_desktop
 from app.routers.deps import get_current_user
+from app.routers.subscriptions import _fy_bounds
 
 router = APIRouter()
 
@@ -18,7 +20,33 @@ class PersonCreate(BaseModel):
     display_name: str
 
 
+def _required_price(gains: float | None) -> int:
+    """Same formula as pricing page: ₹1000 base + 0.02% of gains above ₹10L, capped at ₹10000."""
+    if not gains:
+        return 1000
+    return min(10000, round(1000 + 0.0002 * max(0, gains - 1_000_000)))
+
+
+def _derive_status(paid_this_fy: int, required: int, trial_expires: str | None) -> str:
+    """Derive effective subscription status from FY payments."""
+    if paid_this_fy >= required:
+        return "ACTIVE"
+    if paid_this_fy > 0:
+        return "UNDERPAID"
+    # No payments yet — check if still in trial window
+    if trial_expires:
+        try:
+            exp = datetime.fromisoformat(trial_expires.replace("Z", "+00:00"))
+            if exp > datetime.now(timezone.utc):
+                return "TRIAL"
+        except ValueError:
+            pass
+    return "EXPIRED"
+
+
 def _get_persons_rows(user_id: int, auth_db: Session) -> list[dict]:
+    fy_start, fy_end = _fy_bounds()
+
     rows = auth_db.execute(
         text("""
             SELECT
@@ -26,30 +54,36 @@ def _get_persons_rows(user_id: int, auth_db: Session) -> list[dict]:
                 p.display_name,
                 p.masked_pan,
                 p.pan_hash,
-                s.status        AS subscription_status,
-                s.paid_price,
-                s.starts_at,
-                s.expires_at
+                -- FY paid amount from approved tickets
+                COALESCE((
+                    SELECT SUM(COALESCE(tp.approved_amount, tp.amount))
+                    FROM tickets t
+                    JOIN ticket_persons tp ON tp.ticket_id = t.ticket_id
+                    WHERE tp.person_id = p.person_id
+                      AND t.status = 'APPROVED'
+                      AND date(t.resolved_at) BETWEEN :fy_start AND :fy_end
+                ), 0) AS paid_this_fy,
+                -- trial expiry from earliest subscription (TRIAL row created at registration)
+                (SELECT expires_at FROM subscriptions
+                 WHERE person_id = p.person_id AND status = 'TRIAL'
+                 ORDER BY created_at ASC LIMIT 1) AS trial_expires_at
             FROM persons p
-            LEFT JOIN subscriptions s
-                ON s.person_id = p.person_id
-                AND s.status = 'ACTIVE'
-                AND (s.expires_at IS NULL OR s.expires_at > datetime('now'))
             WHERE p.user_id = :uid
             ORDER BY p.created_at
         """),
-        {"uid": user_id},
+        {"uid": user_id, "fy_start": fy_start, "fy_end": fy_end},
     ).fetchall()
+
+    required = _required_price(None)  # default ₹1000 until gains data is available
     return [
         {
             "person_id":            r[0],
             "display_name":         r[1],
             "masked_pan":           r[2],
             "pan_hash":             r[3],
-            "subscription_status":  r[4] or "NONE",
-            "paid_price":           r[5],
-            "starts_at":            r[6],
-            "expires_at":           r[7],
+            "subscription_status":  _derive_status(r[4], required, r[5]),
+            "paid_price":           r[4],
+            "expires_at":           r[5],
         }
         for r in rows
     ]
@@ -108,8 +142,22 @@ def create_person(
             "dn":  body.display_name,
         },
     )
+    person_id = result.lastrowid
+    now = datetime.now(timezone.utc)
+    auth_db.execute(
+        text("""
+            INSERT INTO subscriptions (user_id, person_id, plan, status, paid_price, starts_at, expires_at)
+            VALUES (:uid, :pid, 'YEAR', 'TRIAL', 0, :starts, :expires)
+        """),
+        {
+            "uid":    user["user_id"],
+            "pid":    person_id,
+            "starts": now.isoformat(),
+            "expires": (now + timedelta(days=30)).isoformat(),
+        },
+    )
     auth_db.commit()
-    return {"person_id": result.lastrowid, "display_name": body.display_name}
+    return {"person_id": person_id, "display_name": body.display_name}
 
 
 @router.delete("/{person_id}", status_code=204)

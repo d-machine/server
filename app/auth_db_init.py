@@ -41,19 +41,34 @@ SCHEMA_SQL = [
     UNIQUE(user_id, pan_hash)
 )""",
 
+"""CREATE TABLE IF NOT EXISTS tickets (
+    ticket_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          INTEGER NOT NULL REFERENCES users(user_id),
+    screenshot_path  TEXT,
+    status           TEXT    NOT NULL DEFAULT 'PENDING',
+    decline_reason   TEXT,
+    submitted_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+    resolved_at      TEXT
+)""",
+
+"""CREATE TABLE IF NOT EXISTS ticket_persons (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id        INTEGER NOT NULL REFERENCES tickets(ticket_id),
+    person_id        INTEGER NOT NULL REFERENCES persons(person_id),
+    amount           INTEGER NOT NULL,
+    approved_amount  INTEGER,
+    notes            TEXT
+)""",
+
 """CREATE TABLE IF NOT EXISTS subscriptions (
     subscription_id  INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id          INTEGER NOT NULL REFERENCES users(user_id),
-    person_id        INTEGER REFERENCES persons(person_id),
-    plan             TEXT    NOT NULL,
-    status           TEXT    NOT NULL DEFAULT 'PENDING_APPROVAL',
+    person_id        INTEGER NOT NULL REFERENCES persons(person_id) UNIQUE,
+    plan             TEXT    NOT NULL DEFAULT 'YEAR',
+    status           TEXT    NOT NULL DEFAULT 'ACTIVE',
     paid_price       INTEGER,
     starts_at        TEXT,
     expires_at       TEXT,
-    screenshot_path  TEXT,
-    cancel_at        TEXT,
-    decline_reason   TEXT,
-    submitted_at     TEXT    NOT NULL DEFAULT (datetime('now')),
     created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
 )""",
 
@@ -83,8 +98,11 @@ INDEX_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash)",
     "CREATE INDEX IF NOT EXISTS idx_persons_user ON persons(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_ticket_persons_ticket ON ticket_persons(ticket_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ticket_persons_person ON ticket_persons(person_id)",
     "CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, status)",
-    "CREATE INDEX IF NOT EXISTS idx_subscriptions_person ON subscriptions(person_id, status)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_person_unique ON subscriptions(person_id)",
     "CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_hash ON password_reset_tokens(token_hash)",
 ]
 

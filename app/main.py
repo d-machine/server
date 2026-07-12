@@ -5,12 +5,14 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app.db_init import init as init_db
 from app.auth_db_init import init as init_auth_db
 from app.routers import instruments, prices, bhavcopy as bhavcopy_router
-from app.routers import auth as auth_router, subscriptions as subs_router, persons as persons_router
+from app.routers import auth as auth_router, subscriptions as subs_router, persons as persons_router, tickets as tickets_router
 from app.cron.fetch_prices import run_all as run_eod_fetch, warm_cache
 from app.cron.populate_instruments import run_all as populate_instruments
 from app.cron.download_bhavcopy import download_all as download_bhavcopy
@@ -29,18 +31,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _cancel_expired_declined_subscriptions():
-    """Run hourly: cancel DECLINED subscriptions whose 24h notice has elapsed."""
+def _cancel_expired_subscriptions():
+    """Run hourly: cancel subscriptions whose expires_at has passed."""
     from app.auth_db import AuthSessionLocal
     from sqlalchemy import text as _text
     db = AuthSessionLocal()
     try:
         db.execute(_text("""
             UPDATE subscriptions
-            SET status='CANCELLED'
-            WHERE status='DECLINED'
-              AND cancel_at IS NOT NULL
-              AND cancel_at <= datetime('now')
+            SET status='EXPIRED'
+            WHERE status='ACTIVE'
+              AND expires_at IS NOT NULL
+              AND expires_at <= datetime('now')
         """))
         db.commit()
     finally:
@@ -122,7 +124,7 @@ async def lifespan(app: FastAPI):
 
     from apscheduler.schedulers.background import BackgroundScheduler
     _scheduler = BackgroundScheduler()
-    _scheduler.add_job(_cancel_expired_declined_subscriptions, "interval", hours=1)
+    _scheduler.add_job(_cancel_expired_subscriptions, "interval", hours=1)
     # 09:00 IST = 03:30 UTC
     _scheduler.add_job(_send_underpaid_reminders, "cron", hour=3, minute=30)
     _scheduler.start()
@@ -136,17 +138,45 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Portfolio Tracker Server", version="0.1.0", lifespan=lifespan)
 
+_allowed_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:8080,http://localhost:8081,https://arthdesk.ashokitservices.com,https://arthdeskadmin.ashokitservices.com",
+).split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(auth_router.router,      prefix="/auth",           tags=["auth"])
 app.include_router(subs_router.router,      prefix="/subscriptions",  tags=["subscriptions"])
+app.include_router(tickets_router.router,   prefix="/tickets",        tags=["tickets"])
 app.include_router(persons_router.router,   prefix="/persons",        tags=["persons"])
 app.include_router(instruments.router,      prefix="/instruments",    tags=["instruments"])
 app.include_router(prices.router,           prefix="/prices",         tags=["prices"])
 app.include_router(bhavcopy_router.router,  prefix="/admin/bhavcopy", tags=["bhavcopy"])
 
 
+_LOCAL_DEV = os.getenv("LOCAL_DEV", "").lower() in ("1", "true", "yes")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/screenshots/{filename}")
+def serve_screenshot(filename: str):
+    """Serve uploaded screenshots locally, mimicking GCS signed URLs for local dev."""
+    if not _LOCAL_DEV:
+        raise HTTPException(status_code=404)
+    path = Path(f"/app/data/screenshots/{filename}")
+    if not path.exists():
+        raise HTTPException(status_code=404)
+    return FileResponse(path)
 
 
 @app.post("/admin/fetch-prices")

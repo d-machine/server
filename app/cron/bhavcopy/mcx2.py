@@ -107,7 +107,7 @@ def download(trade_date, force: bool = False) -> bool:
 
     if not force and already_downloaded(fname):
         logger.info("[%s] %s already downloaded — skipping", SOURCE, trade_date)
-        return True
+        return None
 
     date_str = trade_date.strftime("%Y%m%d")
     logger.info("[%s] Fetching page for VIEWSTATE — date %s", SOURCE, date_str)

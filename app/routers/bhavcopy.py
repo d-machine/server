@@ -149,15 +149,18 @@ def _run_download_job(job_id, source, dates, min_sleep, max_sleep, force, error_
                 job_id, len(dates), min_sleep, max_sleep, force)
     for i, trade_date in enumerate(dates, 1):
         logger.info("[%s] [%d/%d] %s %s", job_id, i, len(dates), source, trade_date)
+        skipped = False
         try:
-            success = download_fn(trade_date, force=force)
-            if not success:
+            result = download_fn(trade_date, force=force)
+            if result is None:
+                skipped = True
+            elif not result:
                 raise RuntimeError("Download returned False")
         except Exception as exc:
             msg = str(exc)
             logger.error("[%s] Failed %s: %s", job_id, trade_date, msg)
             errors.append({"date": trade_date.isoformat(), "error": msg})
-        if i < len(dates):
+        if i < len(dates) and not skipped:
             gap = random.randint(min_sleep, max_sleep)
             logger.info("[%s] Sleeping %ds...", job_id, gap)
             time.sleep(gap)

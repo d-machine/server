@@ -60,7 +60,7 @@ def download(trade_date, force: bool = False) -> bool:
 
     if not force and already_downloaded(fname):
         logger.info("[%s] %s already downloaded — skipping", SOURCE, trade_date)
-        return True
+        return None
 
     url = _URL_TPL.format(trade_date.strftime("%Y%m%d"))
     logger.info("[%s] Downloading %s", SOURCE, url)

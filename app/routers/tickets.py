@@ -19,7 +19,6 @@ SMTP_HOST  = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT  = int(os.getenv("SMTP_PORT", 587))
 SMTP_USER  = os.getenv("SMTP_USER", "sumitshark13@gmail.com")
 SMTP_PASS  = os.getenv("SMTP_PASS", "")
-FROM_EMAIL = os.getenv("FROM_EMAIL", "sumitshark13@gmail.com")
 BASE_URL   = os.getenv("BASE_URL", "https://arthdeskapi.ashokitservices.com")
 LOCAL_DEV  = os.getenv("LOCAL_DEV", "").lower() in ("1", "true", "yes")
 
@@ -45,7 +44,7 @@ def _send_email(to: str, subject: str, body: str):
         return
     msg = MIMEText(body, "plain")
     msg["Subject"] = subject
-    msg["From"] = FROM_EMAIL
+    msg["From"] = SMTP_USER
     msg["To"] = to
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
         s.starttls()

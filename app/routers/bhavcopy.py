@@ -54,7 +54,7 @@ SOURCES = {
     "MCX":      mcx2.download,
 }
 
-MIN_SLEEP_SECONDS = 60
+MIN_SLEEP_SECONDS = 30
 
 
 # -- Enums & Models -----------------------------------------------------------
@@ -174,8 +174,8 @@ def download_bhavcopy(
     source:     BhavSource    = Query(...,   description="Bhavcopy source"),
     start_date: str           = Query(...,   description="Start date YYYY-MM-DD"),
     end_date:   Optional[str] = Query(None,  description="End date YYYY-MM-DD (default: yesterday)"),
-    min_sleep:  int           = Query(60,    description="Min seconds between downloads (min 60)"),
-    max_sleep:  int           = Query(120,   description="Max seconds between downloads"),
+    min_sleep:  int           = Query(30,    description="Min seconds between downloads (min 30)"),
+    max_sleep:  int           = Query(60,    description="Max seconds between downloads"),
     force:      bool          = Query(False, description="Re-download even if already downloaded"),
 ):
     """Trigger bulk historical bhavcopy download. Runs in background, returns immediately."""

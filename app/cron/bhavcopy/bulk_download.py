@@ -37,8 +37,8 @@ SOURCES = {
 }
 
 # Gap between downloads: 4-6 minutes (seconds)
-GAP_MIN = 60   # default min, used only when running as CLI script
-GAP_MAX = 120  # default max, used only when running as CLI script
+GAP_MIN = 30   # default min, used only when running as CLI script
+GAP_MAX = 60   # default max, used only when running as CLI script
 
 
 def date_range(start: date, end: date):

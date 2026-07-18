@@ -19,7 +19,7 @@ from app.cron.bhavcopy.constants import FileStatus
 logger = logging.getLogger(__name__)
 
 # Local filesystem storage root — volume-mounted at /data/bhavcopy inside Docker
-BHAVCOPY_STORAGE_DIR = Path(os.getenv("BHAVCOPY_STORAGE_DIR", "/data/bhavcopy"))
+BHAVCOPY_STORAGE_DIR = Path(os.getenv("BHAVCOPY_STORAGE_DIR", "/app/data/bhavcopy"))
 
 # Kept for backward compat with log messages in bhavcopy modules (no longer GCS)
 GCS_BUCKET = str(BHAVCOPY_STORAGE_DIR)

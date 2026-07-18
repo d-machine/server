@@ -10,7 +10,7 @@ services:
       - ../errors:/app/errors
       - ../logs:/app/logs
       - ./scripts:/app/scripts
-      - ../data/bhavcopy:/data/bhavcopy
+      - ../data/bhavcopy:/app/data/bhavcopy
       - ../data/screenshots:/app/data/screenshots
     env_file:
       - path: .env
@@ -19,7 +19,7 @@ services:
       - DB_PATH=/app/data/portfolio_server.db
       - ERRORS_PATH=/app/errors
       - LOGS_PATH=/app/logs
-      - BHAVCOPY_STORAGE_DIR=/data/bhavcopy
+      - BHAVCOPY_STORAGE_DIR=/app/data/bhavcopy
       - SCREENSHOTS_DIR=/app/data/screenshots
     restart: unless-stopped
     healthcheck:

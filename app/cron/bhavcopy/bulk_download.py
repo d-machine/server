@@ -2,7 +2,7 @@
 Bulk historical bhavcopy downloader.
 
 Runs the appropriate per-source download script for each date in a range,
-with a randomised 4-6 minute gap between requests to avoid rate limiting.
+with a randomised 1-2 minute gap between requests to avoid rate limiting.
 Skips weekends automatically. Non-trading days (holidays) will log a failure
 from the source script and continue — they are not retried.
 
@@ -37,8 +37,8 @@ SOURCES = {
 }
 
 # Gap between downloads: 4-6 minutes (seconds)
-GAP_MIN = 4 * 60
-GAP_MAX = 6 * 60
+GAP_MIN = 60   # default min, used only when running as CLI script
+GAP_MAX = 120  # default max, used only when running as CLI script
 
 
 def date_range(start: date, end: date):

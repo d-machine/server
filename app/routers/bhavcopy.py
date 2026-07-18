@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -53,7 +54,7 @@ SOURCES = {
     "MCX":      mcx2.download,
 }
 
-MIN_SLEEP_SECONDS = 30
+MIN_SLEEP_SECONDS = 60
 
 
 # -- Enums & Models -----------------------------------------------------------
@@ -74,7 +75,8 @@ class DownloadJobResponse(BaseModel):
     start_date:    str
     end_date:      str
     trading_days:  int
-    sleep_seconds: int
+    min_sleep: int
+    max_sleep: int
     force:         bool
     error_file:    str
 
@@ -140,11 +142,11 @@ def _match_inbox_file(filename: str):
 
 # -- Background download job --------------------------------------------------
 
-def _run_download_job(job_id, source, dates, sleep_secs, force, error_file):
+def _run_download_job(job_id, source, dates, min_sleep, max_sleep, force, error_file):
     download_fn = SOURCES[source]
     errors = []
-    logger.info("[%s] Starting -- %d trading days, sleep=%ds, force=%s",
-                job_id, len(dates), sleep_secs, force)
+    logger.info("[%s] Starting -- %d trading days, sleep=%d-%ds, force=%s",
+                job_id, len(dates), min_sleep, max_sleep, force)
     for i, trade_date in enumerate(dates, 1):
         logger.info("[%s] [%d/%d] %s %s", job_id, i, len(dates), source, trade_date)
         try:
@@ -156,8 +158,9 @@ def _run_download_job(job_id, source, dates, sleep_secs, force, error_file):
             logger.error("[%s] Failed %s: %s", job_id, trade_date, msg)
             errors.append({"date": trade_date.isoformat(), "error": msg})
         if i < len(dates):
-            logger.info("[%s] Sleeping %ds...", job_id, sleep_secs)
-            time.sleep(sleep_secs)
+            gap = random.randint(min_sleep, max_sleep)
+            logger.info("[%s] Sleeping %ds...", job_id, gap)
+            time.sleep(gap)
     with open(error_file, "w") as f:
         json.dump(errors, f, indent=2)
     logger.info("[%s] Done -- %d ok, %d failed. Error file: %s",
@@ -171,13 +174,17 @@ def download_bhavcopy(
     source:     BhavSource    = Query(...,   description="Bhavcopy source"),
     start_date: str           = Query(...,   description="Start date YYYY-MM-DD"),
     end_date:   Optional[str] = Query(None,  description="End date YYYY-MM-DD (default: yesterday)"),
-    sleep:      int           = Query(300,   description="Seconds between downloads (min 30)"),
+    min_sleep:  int           = Query(60,    description="Min seconds between downloads (min 60)"),
+    max_sleep:  int           = Query(120,   description="Max seconds between downloads"),
     force:      bool          = Query(False, description="Re-download even if already downloaded"),
 ):
     """Trigger bulk historical bhavcopy download. Runs in background, returns immediately."""
-    if sleep < MIN_SLEEP_SECONDS:
+    if min_sleep < MIN_SLEEP_SECONDS:
         raise HTTPException(status_code=400,
-                            detail=f"sleep must be at least {MIN_SLEEP_SECONDS} seconds")
+                            detail=f"min_sleep must be at least {MIN_SLEEP_SECONDS} seconds")
+    if max_sleep < min_sleep:
+        raise HTTPException(status_code=400,
+                            detail="max_sleep must be >= min_sleep")
     try:
         start = datetime.strptime(start_date, "%Y-%m-%d").date()
     except ValueError:
@@ -203,7 +210,7 @@ def download_bhavcopy(
 
     threading.Thread(
         target=_run_download_job,
-        args=(job_id, source_str, dates, sleep, force, error_file),
+        args=(job_id, source_str, dates, min_sleep, max_sleep, force, error_file),
         daemon=True,
         name=f"bhavcopy-{job_id}",
     ).start()
@@ -217,7 +224,8 @@ def download_bhavcopy(
         start_date    = start.isoformat(),
         end_date      = end.isoformat(),
         trading_days  = len(dates),
-        sleep_seconds = sleep,
+        min_sleep     = min_sleep,
+        max_sleep     = max_sleep,
         force         = force,
         error_file    = str(error_file),
     )

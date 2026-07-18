@@ -12,6 +12,9 @@ services:
       - ./scripts:/app/scripts
       - ../data/bhavcopy:/data/bhavcopy
       - ../data/screenshots:/app/data/screenshots
+    env_file:
+      - path: .env
+        required: false
     environment:
       - DB_PATH=/app/data/portfolio_server.db
       - ERRORS_PATH=/app/errors

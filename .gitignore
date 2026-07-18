@@ -46,6 +46,9 @@ errors/*
 # inbox
 inbox/
 
+# executables (large binaries, uploaded manually to VPS)
+data/executables/
+
 # website-admin (Vite/React build)
 website-admin/node_modules/
 website-admin/dist/

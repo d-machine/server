@@ -3,15 +3,14 @@ Shared utilities for all bhavcopy scripts.
 """
 from __future__ import annotations
 
-import io
 import logging
 import os
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 import requests
-from google.cloud import storage as _gcs
 from sqlalchemy import text
 
 from app.database import engine
@@ -19,7 +18,8 @@ from app.cron.bhavcopy.constants import FileStatus
 
 logger = logging.getLogger(__name__)
 
-GCS_BUCKET = os.getenv("GCS_BHAVCOPY_BUCKET", "arthdesk-bhavcopy")
+# Local filesystem storage root — volume-mounted at /data/bhavcopy inside Docker
+BHAVCOPY_STORAGE_DIR = Path(os.getenv("BHAVCOPY_STORAGE_DIR", "/data/bhavcopy"))
 
 NSE_HEADERS = {
     "sec-ch-ua-platform": '"Android"',
@@ -51,43 +51,36 @@ BSE_HEADERS = {
                   "Mobile Safari/537.36 Edg/147.0.0.0",
 }
 
-_gcs_client: _gcs.Client | None = None
-
-
-def _bucket() -> _gcs.Bucket:
-    global _gcs_client
-    if _gcs_client is None:
-        _gcs_client = _gcs.Client()
-    return _gcs_client.bucket(GCS_BUCKET)
-
-
 def gcs_blob_name(trade_date: date, fname: str) -> str:
-    return f"bhavcopy/{trade_date.isoformat()}/{fname}"
+    """Return the relative path used to store a bhavcopy file."""
+    return f"{trade_date.isoformat()}/{fname}"
+
+
+def _blob_path(blob_name: str) -> Path:
+    return BHAVCOPY_STORAGE_DIR / blob_name
 
 
 def gcs_blob_exists(blob_name: str) -> bool:
-    return _bucket().blob(blob_name).exists()
+    return _blob_path(blob_name).exists()
 
 
 def upload_df_to_gcs(df: pd.DataFrame, blob_name: str) -> None:
-    buf = io.StringIO()
-    df.to_csv(buf, index=False)
-    _bucket().blob(blob_name).upload_from_string(buf.getvalue(), content_type="text/csv")
+    path = _blob_path(blob_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
 
 
 def download_df_from_gcs(blob_name: str, **read_csv_kwargs) -> pd.DataFrame:
-    data = _bucket().blob(blob_name).download_as_bytes()
-    return pd.read_csv(io.BytesIO(data), **read_csv_kwargs)
+    return pd.read_csv(_blob_path(blob_name), **read_csv_kwargs)
 
 
 def download_bytes_from_gcs(blob_name: str) -> bytes:
-    return _bucket().blob(blob_name).download_as_bytes()
+    return _blob_path(blob_name).read_bytes()
 
 
 def download_df_chunks_from_gcs(blob_name: str, chunksize: int = 5_000):
-    """Download blob once, return a chunked CSV reader to avoid large DataFrames."""
-    data = _bucket().blob(blob_name).download_as_bytes()
-    return pd.read_csv(io.BytesIO(data), dtype=str, chunksize=chunksize)
+    """Return a chunked CSV reader to avoid large DataFrames."""
+    return pd.read_csv(_blob_path(blob_name), dtype=str, chunksize=chunksize)
 
 
 def record_status(fname: str, trade_date: date, source: str,

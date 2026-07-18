@@ -1,9 +1,8 @@
-import io
 import json
 import os
 import pathlib
 import smtplib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from email.mime.text import MIMEText
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -24,45 +23,21 @@ FROM_EMAIL = os.getenv("FROM_EMAIL", "sumitshark13@gmail.com")
 BASE_URL   = os.getenv("BASE_URL", "https://arthdeskapi.ashokitservices.com")
 LOCAL_DEV  = os.getenv("LOCAL_DEV", "").lower() in ("1", "true", "yes")
 
-try:
-    from google.cloud import storage as _gcs
-    _gcs_client = None
-    def _gcs_bucket():
-        global _gcs_client
-        GCS_BUCKET = os.getenv("GCS_BHAVCOPY_BUCKET", "arthdesk-bhavcopy")
-        if _gcs_client is None:
-            _gcs_client = _gcs.Client()
-        return _gcs_client.bucket(GCS_BUCKET)
-except ImportError:
-    _gcs_bucket = None
+SCREENSHOTS_DIR = pathlib.Path(os.getenv("SCREENSHOTS_DIR", "/app/data/screenshots"))
 
 
 def _upload_screenshot(ticket_id: int, file_bytes: bytes, filename: str, content_type: str) -> str:
-    object_name = f"screenshots/ticket_{ticket_id}_{filename}"
-    if LOCAL_DEV:
-        dest = pathlib.Path("/app/data/screenshots")
-        dest.mkdir(parents=True, exist_ok=True)
-        (dest / f"ticket_{ticket_id}_{filename}").write_bytes(file_bytes)
-        return object_name
-    ext = (filename or "screenshot").rsplit(".", 1)[-1].lower()
-    bucket = _gcs_bucket()
-    blob = bucket.blob(object_name)
-    blob.upload_from_file(io.BytesIO(file_bytes), content_type=content_type or f"image/{ext}")
-    return object_name
+    SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    stored_name = f"ticket_{ticket_id}_{filename}"
+    (SCREENSHOTS_DIR / stored_name).write_bytes(file_bytes)
+    return f"screenshots/{stored_name}"
 
 
 def _screenshot_url(screenshot_path: str) -> str | None:
     if not screenshot_path:
         return None
-    if LOCAL_DEV:
-        filename = pathlib.Path(screenshot_path).name
-        return f"{BASE_URL}/screenshots/{filename}"
-    try:
-        bucket = _gcs_bucket()
-        blob = bucket.blob(screenshot_path)
-        return blob.generate_signed_url(expiration=timedelta(minutes=15), method="GET")
-    except Exception:
-        return None
+    filename = pathlib.Path(screenshot_path).name
+    return f"{BASE_URL}/screenshots/{filename}"
 
 
 def _send_email(to: str, subject: str, body: str):

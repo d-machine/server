@@ -20,44 +20,21 @@ def _insert_underpaid(auth_engine, person_id: int, days_ago: int, last_reminder_
         )
 
 
-def test_cancel_expired_declined_subscriptions(auth_engine, client, bearer, person_id, registered_user, admin_headers):
-    """DECLINED subscription past its cancel_at should be set to CANCELLED by the job SQL."""
-    from io import BytesIO
-    import json
-
-    persons_payload = json.dumps([{"person_id": person_id, "amount": 1000}])
-    r = client.post(
-        "/subscriptions/submit",
-        data={"persons": persons_payload},
-        files={"screenshot": ("t.png", BytesIO(b"x"), "image/png")},
-        headers=bearer,
-    )
-    sub_id = r.json()["created"][0]["subscription_id"]
-
-    r = client.post(
-        f"/subscriptions/admin/{sub_id}/decline",
-        data={"reason": "Bad screenshot"},
-        headers=admin_headers,
-    )
-    assert r.status_code == 200
-
-    # Backdate cancel_at so the job condition fires
+def test_expired_trial_subscription_loses_access(auth_engine, client, bearer, person_id):
+    """A TRIAL subscription past its expires_at should not satisfy require_active_subscription."""
+    # Backdate the TRIAL subscription's expires_at so it is already expired
     with auth_engine.begin() as conn:
         conn.execute(
-            text("UPDATE subscriptions SET cancel_at=datetime('now', '-1 hour') WHERE subscription_id=:sid"),
-            {"sid": sub_id},
+            text("""
+                UPDATE subscriptions
+                SET expires_at=datetime('now', '-1 hour')
+                WHERE person_id=:pid AND status='TRIAL'
+            """),
+            {"pid": person_id},
         )
 
-    # Run the same SQL the job runs, directly on the test DB
-    with auth_engine.begin() as conn:
-        conn.execute(text("""
-            UPDATE subscriptions SET status='CANCELLED'
-            WHERE status='DECLINED' AND cancel_at IS NOT NULL AND cancel_at <= datetime('now')
-        """))
-
-    r = client.get("/subscriptions/status", headers=bearer)
-    persons = r.json()["persons"]
-    assert any(p["status"] == "CANCELLED" for p in persons)
+    r = client.get("/prices/latest", headers=bearer)
+    assert r.status_code == 403
 
 
 def _query_reminder_candidates(auth_engine):

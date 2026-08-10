@@ -185,5 +185,8 @@ def delete_person(
     if active_sub:
         raise HTTPException(status_code=409, detail="Cannot delete person with active subscription")
 
+    # Remove subscription rows first (TRIAL / CANCELLED) to satisfy FK constraint,
+    # then remove the person. ACTIVE subscriptions are already blocked above.
+    auth_db.execute(text("DELETE FROM subscriptions WHERE person_id = :pid"), {"pid": person_id})
     auth_db.execute(text("DELETE FROM persons WHERE person_id = :pid"), {"pid": person_id})
     auth_db.commit()

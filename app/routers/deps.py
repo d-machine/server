@@ -177,12 +177,18 @@ def require_active_subscription(
     user: dict = Depends(get_current_user),
     auth_db: Session = Depends(get_auth_db),
 ) -> dict:
+    """
+    Allow access for users with an ACTIVE or TRIAL subscription.
+    TRIAL is the 30-day free period created automatically at person registration.
+    Expired trials and unpaid users are rejected with 403.
+    """
     row = auth_db.execute(
         text("""
             SELECT s.subscription_id FROM subscriptions s
             JOIN persons p ON p.person_id = s.person_id
-            WHERE p.user_id = :uid AND s.status = 'ACTIVE'
-            AND (s.expires_at IS NULL OR s.expires_at > datetime('now'))
+            WHERE p.user_id = :uid
+              AND s.status IN ('ACTIVE', 'TRIAL')
+              AND (s.expires_at IS NULL OR s.expires_at > datetime('now'))
             LIMIT 1
         """),
         {"uid": user["user_id"]},

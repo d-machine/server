@@ -69,56 +69,37 @@ class TestRequireActiveSubscription:
         # DB is empty so it might return 200 with empty data — what matters is NOT 403
         assert r.status_code != 403
 
-    def test_pending_subscription_blocked(self, client, bearer, person_id):
-        """PENDING_APPROVAL status should NOT grant access."""
-        from io import BytesIO
-        import json as _json
-        persons_payload = _json.dumps([{"person_id": person_id, "amount": 1000}])
-        client.post(
-            "/subscriptions/submit",
-            data={"persons": persons_payload},
-            files={"screenshot": ("f.png", BytesIO(b"x"), "image/png")},
-            headers=bearer,
-        )
+    def test_trial_subscription_passes(self, client, bearer, person_id):
+        """TRIAL subscription (auto-created on person creation) SHOULD grant access."""
         r = client.get("/prices/latest", headers=bearer)
-        assert r.status_code == 403
+        assert r.status_code != 403
 
-    def test_declined_subscription_blocked(self, client, bearer, admin_headers, person_id):
-        from io import BytesIO
-        import json as _json
-        persons_payload = _json.dumps([{"person_id": person_id, "amount": 1000}])
-        resp = client.post(
-            "/subscriptions/submit",
-            data={"persons": persons_payload},
-            files={"screenshot": ("f.png", BytesIO(b"x"), "image/png")},
-            headers=bearer,
-        )
-        sub_id = resp.json()["created"][0]["subscription_id"]
-        client.post(f"/subscriptions/admin/{sub_id}/decline",
-                    data={"reason": "Bad"}, headers=admin_headers)
+    def test_cancelled_subscription_blocked(self, client, bearer, admin_headers, active_subscription, person_id):
+        """CANCELLED (admin-blocked) subscription should NOT grant access."""
+        client.post(f"/subscriptions/admin/persons/{person_id}/block", headers=admin_headers)
         r = client.get("/prices/latest", headers=bearer)
         assert r.status_code == 403
 
 
 class TestRequireAdmin:
     def test_valid_admin_credentials(self, client, admin_headers):
-        r = client.get("/subscriptions/admin", headers=admin_headers)
+        r = client.get("/subscriptions/admin/users", headers=admin_headers)
         assert r.status_code == 200
 
     def test_wrong_admin_password(self, client):
         creds = base64.b64encode(b"admin:wrongpassword").decode()
-        r = client.get("/subscriptions/admin", headers={"Authorization": f"Basic {creds}"})
+        r = client.get("/subscriptions/admin/users", headers={"Authorization": f"Basic {creds}"})
         assert r.status_code == 401
 
     def test_wrong_admin_username(self, client):
         creds = base64.b64encode(b"notadmin:adminpass").decode()
-        r = client.get("/subscriptions/admin", headers={"Authorization": f"Basic {creds}"})
+        r = client.get("/subscriptions/admin/users", headers={"Authorization": f"Basic {creds}"})
         assert r.status_code == 401
 
     def test_no_auth_header(self, client):
-        r = client.get("/subscriptions/admin")
+        r = client.get("/subscriptions/admin/users")
         assert r.status_code in (401, 422)
 
     def test_bearer_token_not_accepted_for_admin(self, client, bearer):
-        r = client.get("/subscriptions/admin", headers=bearer)
+        r = client.get("/subscriptions/admin/users", headers=bearer)
         assert r.status_code == 401

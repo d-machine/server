@@ -95,10 +95,9 @@ def client(main_engine, auth_engine):
     app_module.app.dependency_overrides[database.get_db]      = override_get_db
     app_module.app.dependency_overrides[auth_db.get_auth_db]  = override_get_auth_db
 
-    # Patch GCS and email sending globally for all tests
-    with patch("app.routers.subscriptions._gcs_bucket"), \
-         patch("app.routers.subscriptions._send_email"), \
-         patch("app.routers.auth._send_email"), \
+    # Patch email sending globally for all tests (SMTP_PASS is empty so no actual
+    # emails are sent, but patching prevents any accidental real SMTP calls).
+    with patch("app.routers.auth._send_email"), \
          patch("app.routers.deps._send_underpaid_email"):
         with TestClient(app_module.app, raise_server_exceptions=True) as c:
             yield c
@@ -158,24 +157,19 @@ def person_id(client, bearer):
 
 
 @pytest.fixture
-def active_subscription(client, registered_user, admin_headers, bearer, person_id):
-    """Give the test person an ACTIVE subscription via the admin approve endpoint."""
-    from io import BytesIO
-    import json
-    persons_payload = json.dumps([{"person_id": person_id, "amount": 1000}])
-    with patch("app.routers.subscriptions._gcs_bucket"):
-        r = client.post(
-            "/subscriptions/submit",
-            data={"persons": persons_payload},
-            files={"screenshot": ("test.png", BytesIO(b"fake"), "image/png")},
-            headers=bearer,
-        )
-    assert r.status_code == 200, r.text
-    sub_id = r.json()["created"][0]["subscription_id"]
+def active_subscription(client, admin_headers, person_id):
+    """Give the test person an ACTIVE subscription.
 
-    r = client.post(f"/subscriptions/admin/{sub_id}/approve", headers=admin_headers)
+    Person creation auto-creates a TRIAL subscription.
+    We promote it to ACTIVE via the admin unblock endpoint so tests that assert
+    status=='ACTIVE' (e.g. /auth/me, delete-person conflict) work correctly.
+    Tests that only need require_active_subscription to pass could use the TRIAL
+    directly, but ACTIVE is a strict superset and safer for assertions.
+    Returns person_id so callers can reference it if needed.
+    """
+    r = client.post(f"/subscriptions/admin/persons/{person_id}/unblock", headers=admin_headers)
     assert r.status_code == 200, r.text
-    return sub_id
+    return person_id
 
 
 @pytest.fixture

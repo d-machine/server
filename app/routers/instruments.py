@@ -415,27 +415,114 @@ def resolve_instruments(
 
 @router.get("/search")
 def search_instruments(
-    q: str = Query(..., min_length=1, description="ISIN, symbol, or name"),
+    q: str = Query(..., min_length=1, description="ISIN, symbol, name, or AMFI code"),
+    asset_class: Optional[str] = Query(
+        None,
+        description=(
+            "Filter by asset class. Desktop values: 'EQUITY', 'MUTUAL_FUND'. "
+            "Server internal values also accepted: 'MF'. "
+            "Omit to search across all classes."
+        ),
+    ),
     db: Session = Depends(get_db),
     _user: dict = Depends(require_active_subscription),
 ):
-    """Search instruments by ISIN, symbol, or name."""
-    results = db.execute(
-        text("""
-            SELECT i.instrument_id, i.name, it.name AS asset_class,
-                   ie.isin, ie.nse_symbol, ie.bse_code
-            FROM instruments i
-            JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-            LEFT JOIN instrument_equity ie ON ie.instrument_id = i.instrument_id
-            WHERE ie.isin = :q
-               OR i.name LIKE :q_like
-               OR UPPER(ie.nse_symbol) LIKE :q_like
-               OR ie.bse_code = :q
-            LIMIT 20
-        """),
-        {"q": q.upper(), "q_like": f"%{q}%"},
-    ).mappings().all()
-    return {"results": [dict(r) for r in results]}
+    """
+    Search instruments by ISIN, symbol, name, or AMFI code.
+
+    Response fields (all results):
+        instrument_id, name, type_code, asset_class,
+        isin, nse_symbol, bse_code,    -- equity fields (None for MF)
+        amfi_code, fund_house          -- MF fields (None for equity)
+
+    asset_class in response uses server conventions: 'EQUITY', 'MF', etc.
+    Desktop save_instrument() handles both 'MF' and 'MUTUAL_FUND'.
+    """
+    q_upper = q.upper()
+    q_like  = f"%{q}%"
+
+    # Normalise incoming asset_class: desktop sends 'MUTUAL_FUND', server stores 'MF'
+    _ac = (asset_class or "").upper()
+    if _ac == "MUTUAL_FUND":
+        _ac = "MF"
+
+    results = []
+
+    # ── EQUITY branch ──────────────────────────────────────────────────────────
+    if not _ac or _ac == "EQUITY":
+        rows = db.execute(
+            text("""
+                SELECT
+                    i.instrument_id,
+                    i.name,
+                    it.name        AS type_code,
+                    it.asset_class AS asset_class,
+                    ie.isin,
+                    ie.nse_symbol,
+                    ie.bse_code,
+                    NULL           AS amfi_code,
+                    NULL           AS fund_house
+                FROM instruments i
+                JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
+                JOIN instrument_equity ie ON ie.instrument_id = i.instrument_id
+                WHERE it.asset_class = 'EQUITY'
+                  AND i.is_active = 1
+                  AND (
+                      ie.isin = :q
+                      OR i.name LIKE :q_like
+                      OR UPPER(ie.nse_symbol) LIKE :q_like
+                      OR ie.bse_code = :q
+                  )
+                ORDER BY
+                    CASE WHEN ie.isin = :q THEN 0
+                         WHEN UPPER(ie.nse_symbol) = :q THEN 1
+                         ELSE 2
+                    END,
+                    i.name
+                LIMIT 20
+            """),
+            {"q": q_upper, "q_like": q_like},
+        ).mappings().all()
+        results.extend(dict(r) for r in rows)
+
+    # ── MUTUAL FUND branch ────────────────────────────────────────────────────
+    if not _ac or _ac == "MF":
+        rows = db.execute(
+            text("""
+                SELECT
+                    i.instrument_id,
+                    i.name,
+                    it.name        AS type_code,
+                    it.asset_class AS asset_class,
+                    imf.isin,
+                    NULL           AS nse_symbol,
+                    NULL           AS bse_code,
+                    imf.amfi_code,
+                    imf.fund_house
+                FROM instruments i
+                JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
+                JOIN instrument_mf imf ON imf.instrument_id = i.instrument_id
+                WHERE it.asset_class = 'MF'
+                  AND i.is_active = 1
+                  AND (
+                      imf.isin = :q
+                      OR imf.amfi_code = :q
+                      OR i.name LIKE :q_like
+                      OR imf.fund_house LIKE :q_like
+                  )
+                ORDER BY
+                    CASE WHEN imf.isin = :q THEN 0
+                         WHEN imf.amfi_code = :q THEN 1
+                         ELSE 2
+                    END,
+                    i.name
+                LIMIT 20
+            """),
+            {"q": q_upper, "q_like": q_like},
+        ).mappings().all()
+        results.extend(dict(r) for r in rows)
+
+    return {"results": results}
 
 
 @router.post("/equity")

@@ -19,16 +19,16 @@ class TestHealth:
 
 class TestAdminEndpoints:
     def test_admin_list_subscriptions_valid_creds(self, client, admin_headers):
-        r = client.get("/subscriptions/admin", headers=admin_headers)
+        r = client.get("/subscriptions/admin/users", headers=admin_headers)
         assert r.status_code == 200
 
     def test_admin_list_subscriptions_invalid_creds(self, client):
         creds = base64.b64encode(b"admin:wrong").decode()
-        r = client.get("/subscriptions/admin", headers={"Authorization": f"Basic {creds}"})
+        r = client.get("/subscriptions/admin/users", headers={"Authorization": f"Basic {creds}"})
         assert r.status_code == 401
 
     def test_admin_list_subscriptions_no_creds(self, client):
-        r = client.get("/subscriptions/admin")
+        r = client.get("/subscriptions/admin/users")
         assert r.status_code in (401, 422)
 
     def test_gated_endpoint_without_any_auth(self, client):

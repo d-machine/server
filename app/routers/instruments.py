@@ -7,7 +7,7 @@ from arthdesk_db import Database
 from sqlalchemy import text, select
 from app.database import get_db
 from app.routers.deps import require_active_subscription
-from app.tables import instrument_types
+from app.tables import instrument_types, asset_classes
 
 router = APIRouter()
 
@@ -74,12 +74,12 @@ def _base(ref: PendingRef, row, **extra) -> dict:
         "fo_expiry_date":           None,
         "fo_lot_size":              None,
         "fo_strike_price_paise":    None,
-        "fo_instrument_type":       None,
+        "fo_contract_type":         None,
         "fo_option_type":           None,
         "fo_nse_fininstrmid":       None,
         "fo_bse_fininstrmid":       None,
         "mcx_symbol":               None,
-        "mcx_instrument_type":      None,
+        "mcx_contract_type":        None,
         "mcx_expiry_date":          None,
         "mcx_lot_size":             None,
         "mcx_unit":                 None,
@@ -208,7 +208,7 @@ def _resolve_fo(ref: PendingRef, db: Database) -> Optional[dict]:
         row = db.execute(text("""
             SELECT i.instrument_id, i.instrument_type_id, it.name AS type, i.name,
                    ifo.underlying_instrument_id, ifo.underlying_symbol,
-                   ifo.instrument_type AS fo_instrument_type,
+                   ifo.contract_type AS fo_contract_type,
                    ifo.option_type AS fo_option_type,
                    ifo.expiry_date, ifo.strike_price_paise,
                    ifo.lot_size, ifo.nse_fininstrmid, ifo.bse_fininstrmid
@@ -233,7 +233,7 @@ def _resolve_fo(ref: PendingRef, db: Database) -> Optional[dict]:
         row = db.execute(text(f"""
             SELECT i.instrument_id, i.instrument_type_id, it.name AS type, i.name,
                    ifo.underlying_instrument_id, ifo.underlying_symbol,
-                   ifo.instrument_type AS fo_instrument_type,
+                   ifo.contract_type AS fo_contract_type,
                    ifo.option_type AS fo_option_type,
                    ifo.expiry_date, ifo.strike_price_paise,
                    ifo.lot_size, ifo.nse_fininstrmid, ifo.bse_fininstrmid
@@ -242,7 +242,7 @@ def _resolve_fo(ref: PendingRef, db: Database) -> Optional[dict]:
             JOIN instrument_derivatives ifo ON ifo.instrument_id = i.instrument_id
             WHERE UPPER(ifo.underlying_symbol) = :sym
               AND ifo.expiry_date = :exp
-              AND ifo.instrument_type = :itype
+              AND ifo.contract_type = :itype
               AND i.is_active = 1{strike_clause}
             LIMIT 1
         """), params).mappings().first()
@@ -256,7 +256,7 @@ def _resolve_fo(ref: PendingRef, db: Database) -> Optional[dict]:
         fo_expiry_date=row["expiry_date"],
         fo_lot_size=row["lot_size"],
         fo_strike_price_paise=row["strike_price_paise"],
-        fo_instrument_type=row["fo_instrument_type"],
+        fo_contract_type=row["fo_contract_type"],
         fo_option_type=row["fo_option_type"],
         fo_nse_fininstrmid=row["nse_fininstrmid"],
         fo_bse_fininstrmid=row["bse_fininstrmid"],
@@ -270,7 +270,7 @@ def _resolve_mcx(ref: PendingRef, db: Database) -> Optional[dict]:
 
     row = db.execute(text("""
         SELECT i.instrument_id, i.instrument_type_id, it.name AS type, i.name,
-               imcx.mcx_symbol, imcx.instrument_type AS mcx_instrument_type,
+               imcx.mcx_symbol, imcx.contract_type AS mcx_contract_type,
                imcx.expiry_date, imcx.strike_price_paise, imcx.option_type,
                imcx.lot_size, imcx.unit
         FROM instruments i
@@ -287,7 +287,7 @@ def _resolve_mcx(ref: PendingRef, db: Database) -> Optional[dict]:
     return _base(ref, row,
         primary_exchange_code="MCX",
         mcx_symbol=row["mcx_symbol"],
-        mcx_instrument_type=row["mcx_instrument_type"],
+        mcx_contract_type=row["mcx_contract_type"],
         mcx_expiry_date=row["expiry_date"],
         mcx_lot_size=row["lot_size"],
         mcx_unit=row["unit"],
@@ -305,6 +305,20 @@ def get_instrument_types(db: Database = Depends(get_db)):
     """Return all instrument types (server-mastered reference data)."""
     stmt = select(instrument_types).order_by(instrument_types.c.instrument_type_id)
     return {"instrument_types": db.fetch_all(stmt)}
+
+
+@router.get("/asset-classes")
+def get_asset_classes(db: Database = Depends(get_db)):
+    """
+    Return the canonical asset_class codes (server-mastered reference data).
+
+    Codes match arthdesk-py's backend/enums.py::AssetClass exactly — desktop
+    clients sync this list rather than hardcoding their own copy, so the two
+    can never drift the way 'MF'/'MUTUAL_FUND' and 'DERIVATIVE'/'DERIVATIVES'
+    previously did.
+    """
+    stmt = select(asset_classes).order_by(asset_classes.c.code)
+    return {"asset_classes": db.fetch_all(stmt)}
 
 
 @router.get("/updates", dependencies=[Depends(require_active_subscription)])
@@ -412,8 +426,8 @@ def search_instruments(
     asset_class: Optional[str] = Query(
         None,
         description=(
-            "Filter by asset class. Desktop values: 'EQUITY', 'MUTUAL_FUND'. "
-            "Server internal values also accepted: 'MF'. "
+            "Filter by asset class: 'EQUITY', 'MUTUAL_FUND', 'INDEX', 'FIXED_INCOME', "
+            "'DERIVATIVES', 'COMMODITY' — see the asset_classes table. "
             "Omit to search across all classes."
         ),
     ),
@@ -427,16 +441,12 @@ def search_instruments(
         isin, nse_symbol, bse_code,    -- equity fields (None for MF)
         amfi_code, fund_house          -- MF fields (None for equity)
 
-    asset_class in response uses server conventions: 'EQUITY', 'MF', etc.
-    Desktop save_instrument() handles both 'MF' and 'MUTUAL_FUND'.
+    asset_class values (both query param and response) match asset_classes.code
+    exactly — the same codes arthdesk-py's backend/enums.py::AssetClass uses.
     """
     q_upper = q.upper()
     q_like  = f"%{q}%"
-
-    # Normalise incoming asset_class: desktop sends 'MUTUAL_FUND', server stores 'MF'
     _ac = (asset_class or "").upper()
-    if _ac == "MUTUAL_FUND":
-        _ac = "MF"
 
     results = []
 
@@ -478,7 +488,7 @@ def search_instruments(
         results.extend(dict(r) for r in rows)
 
     # ── MUTUAL FUND branch ────────────────────────────────────────────────────
-    if not _ac or _ac == "MF":
+    if not _ac or _ac == "MUTUAL_FUND":
         rows = db.execute(
             text("""
                 SELECT
@@ -494,7 +504,7 @@ def search_instruments(
                 FROM instruments i
                 JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
                 JOIN instrument_mf imf ON imf.instrument_id = i.instrument_id
-                WHERE it.asset_class = 'MF'
+                WHERE it.asset_class = 'MUTUAL_FUND'
                   AND i.is_active = 1
                   AND (
                       imf.isin = :q

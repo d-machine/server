@@ -16,6 +16,25 @@ class TestInstrumentTypes:
         types = data if isinstance(data, list) else data.get("instrument_types", data)
         assert any(t["name"] == "EQUITY" for t in types)
 
+    def test_types_use_canonical_asset_class_codes(self, client):
+        """asset_class values must match arthdesk-py's AssetClass enum, not the old
+        server-internal 'MF'/'DERIVATIVE' abbreviations."""
+        r = client.get("/instruments/types")
+        types = r.json()["instrument_types"]
+        codes = {t["asset_class"] for t in types}
+        assert "MUTUAL_FUND" in codes
+        assert "DERIVATIVES" in codes
+        assert "MF" not in codes
+        assert "DERIVATIVE" not in codes
+
+
+class TestAssetClasses:
+    def test_asset_classes_no_auth_required(self, client):
+        r = client.get("/instruments/asset-classes")
+        assert r.status_code == 200
+        codes = {a["code"] for a in r.json()["asset_classes"]}
+        assert codes == {"EQUITY", "INDEX", "MUTUAL_FUND", "FIXED_INCOME", "DERIVATIVES", "COMMODITY"}
+
     def test_get_by_isin_no_auth(self, client, main_engine):
         iid = seed_equity(main_engine, isin="INE000000001", symbol="TESTSYM")
         r = client.get("/instruments/INE000000001")
@@ -84,6 +103,25 @@ class TestInstrumentSearch:
         body = r.json()
         results = body if isinstance(body, list) else body.get("results", [])
         assert isinstance(results, list)
+
+    def test_search_mutual_fund_asset_class_filter(self, client, bearer_with_sub, main_engine):
+        """Regression: asset_class='MUTUAL_FUND' must still match rows whose
+        instrument_types.asset_class is 'MUTUAL_FUND' (post-rename from 'MF')."""
+        from sqlalchemy import text
+        with main_engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO instruments (instrument_id, name, instrument_type_id, is_active, created_at, updated_at)
+                SELECT 9001, 'SearchTest Fund', instrument_type_id, 1, datetime('now'), datetime('now')
+                FROM instrument_types WHERE name = 'EQUITY_MF'
+            """))
+            conn.execute(text("""
+                INSERT INTO instrument_mf (instrument_id, isin, amfi_code, fund_house)
+                VALUES (9001, 'INF999999999', '999999', 'Test AMC')
+            """))
+        r = client.get("/instruments/search?q=SearchTest&asset_class=MUTUAL_FUND", headers=bearer_with_sub)
+        assert r.status_code == 200
+        results = r.json()["results"]
+        assert any(row["instrument_id"] == 9001 for row in results)
 
     def test_search_no_results(self, client, bearer_with_sub):
         r = client.get("/instruments/search?q=ZZZNOMATCHZZZ", headers=bearer_with_sub)

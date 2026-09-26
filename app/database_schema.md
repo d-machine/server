@@ -90,7 +90,7 @@ erDiagram
     INSTRUMENT_MCX {
         int instrument_id PK, FK
         string mcx_symbol
-        string instrument_type
+        string contract_type
         string expiry_date
         float lot_size
         string unit

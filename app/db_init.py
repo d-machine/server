@@ -23,10 +23,15 @@ SCHEMA_SQL = [
     country TEXT NOT NULL DEFAULT 'IN'
 )""",
 
+"""CREATE TABLE IF NOT EXISTS asset_classes (
+    code  TEXT PRIMARY KEY,
+    name  TEXT NOT NULL
+)""",
+
 """CREATE TABLE IF NOT EXISTS instrument_types (
     instrument_type_id  INTEGER PRIMARY KEY,
     name                TEXT NOT NULL UNIQUE,
-    asset_class         TEXT NOT NULL,
+    asset_class         TEXT NOT NULL REFERENCES asset_classes(code),
     tax_category        TEXT NOT NULL
 )""",
 
@@ -87,7 +92,7 @@ SCHEMA_SQL = [
     instrument_id            INTEGER PRIMARY KEY REFERENCES instruments(instrument_id),
     underlying_instrument_id INTEGER REFERENCES instruments(instrument_id),
     underlying_symbol        TEXT NOT NULL,
-    instrument_type          TEXT NOT NULL,
+    contract_type            TEXT NOT NULL,
     expiry_date              TEXT NOT NULL,
     strike_price_paise       INTEGER NOT NULL DEFAULT 0,
     option_type              TEXT NOT NULL DEFAULT '-',
@@ -100,13 +105,13 @@ SCHEMA_SQL = [
 """CREATE TABLE IF NOT EXISTS instrument_mcx (
     instrument_id      INTEGER PRIMARY KEY REFERENCES instruments(instrument_id),
     mcx_symbol         TEXT NOT NULL,
-    instrument_type    TEXT NOT NULL,
+    contract_type      TEXT NOT NULL,
     expiry_date        TEXT NOT NULL,
     strike_price_paise INTEGER NOT NULL DEFAULT 0,
     option_type        TEXT NOT NULL DEFAULT '-',
     lot_size           REAL,
     unit               TEXT,
-    UNIQUE(mcx_symbol, instrument_type, expiry_date, strike_price_paise, option_type)
+    UNIQUE(mcx_symbol, contract_type, expiry_date, strike_price_paise, option_type)
 )""",
 
 # -- EOD price tables --------------------------------------------------------
@@ -217,7 +222,7 @@ INDEX_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_instrument_derivatives_nse_id ON instrument_derivatives(nse_fininstrmid)",
     "CREATE INDEX IF NOT EXISTS idx_instrument_derivatives_bse_id ON instrument_derivatives(bse_fininstrmid)",
     "CREATE INDEX IF NOT EXISTS idx_instrument_derivatives_underlying ON instrument_derivatives(underlying_instrument_id, expiry_date)",
-    "CREATE INDEX IF NOT EXISTS idx_instrument_mcx_lookup ON instrument_mcx(mcx_symbol, instrument_type, expiry_date)",
+    "CREATE INDEX IF NOT EXISTS idx_instrument_mcx_lookup ON instrument_mcx(mcx_symbol, contract_type, expiry_date)",
     "CREATE INDEX IF NOT EXISTS idx_equity_eod_date ON equity_eod(trade_date)",
     "CREATE INDEX IF NOT EXISTS idx_fo_eod_date ON fo_eod(trade_date)",
     "CREATE INDEX IF NOT EXISTS idx_mcx_eod_date ON mcx_eod(trade_date)",
@@ -276,19 +281,30 @@ SEED_SQL = [
     "INSERT OR IGNORE INTO exchanges (code, name) VALUES ('BSE',  'Bombay Stock Exchange')",
     "INSERT OR IGNORE INTO exchanges (code, name) VALUES ('MCX',  'Multi Commodity Exchange')",
     "INSERT OR IGNORE INTO exchanges (code, name) VALUES ('AMFI', 'Association of Mutual Funds in India')",
+
+    # Canonical asset_class codes — must match arthdesk-py's backend/enums.py::AssetClass
+    # exactly (that's the whole point of normalizing this into its own table: one
+    # source of truth both sides sync against instead of drifting independently).
+    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('EQUITY',       'Equity')",
+    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('INDEX',        'Index')",
+    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('MUTUAL_FUND',  'Mutual Fund')",
+    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('FIXED_INCOME', 'Fixed Income')",
+    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('DERIVATIVES',  'Derivatives')",
+    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('COMMODITY',    'Commodity')",
+
     "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('EQUITY',            'EQUITY',       'EQUITY_LTCG')",
     "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('INDEX',             'INDEX',        'NA')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('EQUITY_MF',         'MF',           'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('DEBT_MF',           'MF',           'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('HYBRID_MF',         'MF',           'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('ELSS',              'MF',           'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('SIF',               'MF',           'EQUITY_LTCG')",
+    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('EQUITY_MF',         'MUTUAL_FUND',  'EQUITY_LTCG')",
+    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('DEBT_MF',           'MUTUAL_FUND',  'DEBT')",
+    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('HYBRID_MF',         'MUTUAL_FUND',  'EQUITY_LTCG')",
+    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('ELSS',              'MUTUAL_FUND',  'EQUITY_LTCG')",
+    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('SIF',               'MUTUAL_FUND',  'EQUITY_LTCG')",
     "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('FD',                'FIXED_INCOME', 'DEBT')",
     "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('BOND',              'FIXED_INCOME', 'DEBT')",
     "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('PPF',               'FIXED_INCOME', 'DEBT')",
     "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('NPS',               'FIXED_INCOME', 'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('FUTURES',           'DERIVATIVE',   'NON_SPECULATIVE')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('OPTIONS',           'DERIVATIVE',   'NON_SPECULATIVE')",
+    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('FUTURES',           'DERIVATIVES',  'NON_SPECULATIVE')",
+    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('OPTIONS',           'DERIVATIVES',  'NON_SPECULATIVE')",
     "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('COMMODITY_FUTURES', 'COMMODITY',    'NON_SPECULATIVE')",
     "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('COMMODITY_OPTIONS', 'COMMODITY',    'NON_SPECULATIVE')",
 ]

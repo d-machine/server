@@ -14,6 +14,12 @@ from sqlalchemy import MetaData, Table, Column, Integer, Text
 
 metadata = MetaData()
 
+asset_classes = Table(
+    "asset_classes", metadata,
+    Column("code", Text, primary_key=True),
+    Column("name", Text, nullable=False),
+)
+
 instrument_types = Table(
     "instrument_types", metadata,
     Column("instrument_type_id", Integer, primary_key=True),

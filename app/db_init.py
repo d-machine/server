@@ -291,22 +291,29 @@ SEED_SQL = [
     "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('FIXED_INCOME', 'Fixed Income')",
     "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('DERIVATIVES',  'Derivatives')",
     "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('COMMODITY',    'Commodity')",
+    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('PENDING',      'Pending')",
 
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('EQUITY',            'EQUITY',       'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('INDEX',             'INDEX',        'NA')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('EQUITY_MF',         'MUTUAL_FUND',  'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('DEBT_MF',           'MUTUAL_FUND',  'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('HYBRID_MF',         'MUTUAL_FUND',  'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('ELSS',              'MUTUAL_FUND',  'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('SIF',               'MUTUAL_FUND',  'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('FD',                'FIXED_INCOME', 'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('BOND',              'FIXED_INCOME', 'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('PPF',               'FIXED_INCOME', 'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('NPS',               'FIXED_INCOME', 'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('FUTURES',           'DERIVATIVES',  'NON_SPECULATIVE')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('OPTIONS',           'DERIVATIVES',  'NON_SPECULATIVE')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('COMMODITY_FUTURES', 'COMMODITY',    'NON_SPECULATIVE')",
-    "INSERT OR IGNORE INTO instrument_types (name, asset_class, tax_category) VALUES ('COMMODITY_OPTIONS', 'COMMODITY',    'NON_SPECULATIVE')",
+    # instrument_type_id is pinned explicitly, not left to insertion order — this
+    # value is now part of the client/server wire protocol (both sides' copies of
+    # this table must assign the same id to the same type), so it can never be
+    # allowed to depend on the order rows happen to be listed here. Never
+    # renumber an existing id once shipped; only ever append a new one.
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (1,  'EQUITY',            'EQUITY',       'EQUITY_LTCG')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (2,  'INDEX',             'INDEX',        'NA')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (3,  'EQUITY_MF',         'MUTUAL_FUND',  'EQUITY_LTCG')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (4,  'DEBT_MF',           'MUTUAL_FUND',  'DEBT')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (5,  'HYBRID_MF',         'MUTUAL_FUND',  'EQUITY_LTCG')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (6,  'ELSS',              'MUTUAL_FUND',  'EQUITY_LTCG')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (7,  'SIF',               'MUTUAL_FUND',  'EQUITY_LTCG')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (8,  'FD',                'FIXED_INCOME', 'DEBT')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (9,  'BOND',              'FIXED_INCOME', 'DEBT')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (10, 'PPF',               'FIXED_INCOME', 'DEBT')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (11, 'NPS',               'FIXED_INCOME', 'DEBT')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (12, 'FUTURES',           'DERIVATIVES',  'NON_SPECULATIVE')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (13, 'OPTIONS',           'DERIVATIVES',  'NON_SPECULATIVE')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (14, 'COMMODITY_FUTURES', 'COMMODITY',    'NON_SPECULATIVE')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (15, 'COMMODITY_OPTIONS', 'COMMODITY',    'NON_SPECULATIVE')",
+    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (0,  'PENDING',           'PENDING',      'NA')",
 ]
 
 

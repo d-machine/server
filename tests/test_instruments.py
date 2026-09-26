@@ -33,7 +33,7 @@ class TestAssetClasses:
         r = client.get("/instruments/asset-classes")
         assert r.status_code == 200
         codes = {a["code"] for a in r.json()["asset_classes"]}
-        assert codes == {"EQUITY", "INDEX", "MUTUAL_FUND", "FIXED_INCOME", "DERIVATIVES", "COMMODITY"}
+        assert codes == {"EQUITY", "INDEX", "MUTUAL_FUND", "FIXED_INCOME", "DERIVATIVES", "COMMODITY", "PENDING"}
 
     def test_get_by_isin_no_auth(self, client, main_engine):
         iid = seed_equity(main_engine, isin="INE000000001", symbol="TESTSYM")

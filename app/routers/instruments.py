@@ -3,10 +3,11 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+from arthdesk_db import Database
+from sqlalchemy import text, select
 from app.database import get_db
 from app.routers.deps import require_active_subscription
+from app.tables import instrument_types
 
 router = APIRouter()
 
@@ -88,7 +89,7 @@ def _base(ref: PendingRef, row, **extra) -> dict:
     }
 
 
-def _resolve_equity(ref: PendingRef, db: Session) -> Optional[dict]:
+def _resolve_equity(ref: PendingRef, db: Database) -> Optional[dict]:
     row = None
 
     if ref.isin:
@@ -132,7 +133,7 @@ def _resolve_equity(ref: PendingRef, db: Session) -> Optional[dict]:
     )
 
 
-def _resolve_index(ref: PendingRef, db: Session) -> Optional[dict]:
+def _resolve_index(ref: PendingRef, db: Database) -> Optional[dict]:
     row = None
     sym = (ref.nse_symbol or "").upper()
 
@@ -168,7 +169,7 @@ def _resolve_index(ref: PendingRef, db: Session) -> Optional[dict]:
     )
 
 
-def _resolve_mf(ref: PendingRef, db: Session) -> Optional[dict]:
+def _resolve_mf(ref: PendingRef, db: Database) -> Optional[dict]:
     row = None
 
     if ref.amfi_code:
@@ -200,7 +201,7 @@ def _resolve_mf(ref: PendingRef, db: Session) -> Optional[dict]:
     )
 
 
-def _resolve_fo(ref: PendingRef, db: Session) -> Optional[dict]:
+def _resolve_fo(ref: PendingRef, db: Database) -> Optional[dict]:
     row = None
 
     if ref.nse_fininstrmid:
@@ -262,7 +263,7 @@ def _resolve_fo(ref: PendingRef, db: Session) -> Optional[dict]:
     )
 
 
-def _resolve_mcx(ref: PendingRef, db: Session) -> Optional[dict]:
+def _resolve_mcx(ref: PendingRef, db: Database) -> Optional[dict]:
     symbol = (ref.mcx_symbol or ref.underlying_symbol or "").upper()
     if not symbol or not ref.expiry_date:
         return None
@@ -300,24 +301,17 @@ def _resolve_mcx(ref: PendingRef, db: Session) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 @router.get("/types")
-def get_instrument_types(db: Session = Depends(get_db)):
+def get_instrument_types(db: Database = Depends(get_db)):
     """Return all instrument types (server-mastered reference data)."""
-    rows = db.execute(
-        text("""
-            SELECT instrument_type_id, name, asset_class, tax_category
-            FROM instrument_types
-            ORDER BY instrument_type_id
-        """),
-    ).mappings().all()
-    return {"instrument_types": [dict(r) for r in rows]}
+    stmt = select(instrument_types).order_by(instrument_types.c.instrument_type_id)
+    return {"instrument_types": db.fetch_all(stmt)}
 
 
-@router.get("/updates")
+@router.get("/updates", dependencies=[Depends(require_active_subscription)])
 def get_instrument_updates(
     instrument_ids: List[int] = Query(None, description="Filter by instrument_ids"),
     since: Optional[str] = Query(None, description="ISO datetime e.g. 2026-04-16T10:30:00"),
-    db: Session = Depends(get_db),
-    _user: dict = Depends(require_active_subscription),
+    db: Database = Depends(get_db),
 ):
     """
     Return instrument metadata for delta sync.
@@ -373,11 +367,10 @@ def get_instrument_updates(
     return {"updates": [dict(r) for r in rows], "synced_at": synced_at}
 
 
-@router.post("/resolve")
+@router.post("/resolve", dependencies=[Depends(require_active_subscription)])
 def resolve_instruments(
     refs: List[PendingRef],
-    db: Session = Depends(get_db),
-    _user: dict = Depends(require_active_subscription),
+    db: Database = Depends(get_db),
 ):
     """
     Resolve pending instruments from the client.
@@ -413,7 +406,7 @@ def resolve_instruments(
     return {"resolved": resolved}
 
 
-@router.get("/search")
+@router.get("/search", dependencies=[Depends(require_active_subscription)])
 def search_instruments(
     q: str = Query(..., min_length=1, description="ISIN, symbol, name, or AMFI code"),
     asset_class: Optional[str] = Query(
@@ -424,8 +417,7 @@ def search_instruments(
             "Omit to search across all classes."
         ),
     ),
-    db: Session = Depends(get_db),
-    _user: dict = Depends(require_active_subscription),
+    db: Database = Depends(get_db),
 ):
     """
     Search instruments by ISIN, symbol, name, or AMFI code.
@@ -526,7 +518,7 @@ def search_instruments(
 
 
 @router.post("/equity")
-def create_equity_instrument(req: CreateEquityRequest, db: Session = Depends(get_db)):
+def create_equity_instrument(req: CreateEquityRequest, db: Database = Depends(get_db)):
     """
     Manually add an equity instrument to the server catalog.
 
@@ -629,7 +621,7 @@ def create_equity_instrument(req: CreateEquityRequest, db: Session = Depends(get
 
 
 @router.get("/{isin}")
-def get_instrument(isin: str, db: Session = Depends(get_db)):
+def get_instrument(isin: str, db: Database = Depends(get_db)):
     """Get instrument details by ISIN."""
     row = db.execute(
         text("""

@@ -73,20 +73,22 @@ def client(main_engine, auth_engine):
     from app import database as db_module
     from app import auth_db as auth_db_module
 
+    from arthdesk_db import Database
+
     main_session = sessionmaker(autocommit=False, autoflush=False, bind=main_engine)
     auth_session = sessionmaker(autocommit=False, autoflush=False, bind=auth_engine)
 
     def override_get_db():
         db = main_session()
         try:
-            yield db
+            yield Database(db)
         finally:
             db.close()
 
     def override_get_auth_db():
         db = auth_session()
         try:
-            yield db
+            yield Database(db)
         finally:
             db.close()
 

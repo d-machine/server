@@ -8,7 +8,7 @@ from email.mime.text import MIMEText
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from arthdesk_db import Database
 
 from app.auth_db import get_auth_db
 from app.routers.deps import get_current_user, require_admin
@@ -52,14 +52,14 @@ def _send_email(to: str, subject: str, body: str):
         s.send_message(msg)
 
 
-def _user_email(auth_db: Session, user_id: int) -> str:
+def _user_email(auth_db: Database, user_id: int) -> str:
     row = auth_db.execute(
         text("SELECT email FROM users WHERE user_id=:uid"), {"uid": user_id}
     ).fetchone()
     return row[0] if row else ""
 
 
-def _ticket_detail(auth_db: Session, ticket_id: int) -> dict:
+def _ticket_detail(auth_db: Database, ticket_id: int) -> dict:
     t = auth_db.execute(text("""
         SELECT t.ticket_id, t.user_id, t.screenshot_path, t.status,
                t.decline_reason, t.submitted_at, t.resolved_at,
@@ -112,7 +112,7 @@ async def submit_ticket(
     persons: str = Form(...),
     screenshot: UploadFile = File(...),
     user: dict = Depends(get_current_user),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     try:
         person_entries = json.loads(persons)
@@ -167,7 +167,7 @@ async def submit_ticket(
 @router.get("/my")
 def my_tickets(
     user: dict = Depends(get_current_user),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     rows = auth_db.execute(text("""
         SELECT t.ticket_id, t.status, t.decline_reason, t.submitted_at, t.resolved_at,
@@ -205,7 +205,7 @@ def my_tickets(
 def admin_list_tickets(
     status: str | None = None,
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     query = """
         SELECT t.ticket_id, t.user_id, t.screenshot_path, t.status,
@@ -252,7 +252,7 @@ def admin_list_tickets(
 def admin_get_ticket(
     ticket_id: int,
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     detail = _ticket_detail(auth_db, ticket_id)
     if not detail:
@@ -271,7 +271,7 @@ def admin_update_ticket_person(
     tp_id: int,
     body: TicketPersonUpdate,
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     row = auth_db.execute(
         text("SELECT id FROM ticket_persons WHERE id=:id AND ticket_id=:tid"),
@@ -294,7 +294,7 @@ def admin_update_ticket_person(
 def admin_approve_ticket(
     ticket_id: int,
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     ticket = auth_db.execute(
         text("SELECT user_id, status FROM tickets WHERE ticket_id=:tid"),
@@ -345,7 +345,7 @@ def admin_decline_ticket(
     ticket_id: int,
     reason: str = Form(...),
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     ticket = auth_db.execute(
         text("SELECT user_id, status FROM tickets WHERE ticket_id=:tid"),
@@ -383,7 +383,7 @@ async def admin_create_ticket(
     persons: str = Form(...),
     screenshot: UploadFile = File(None),
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     try:
         person_entries = json.loads(persons)

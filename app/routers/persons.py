@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from arthdesk_db import Database
 
 from app.auth_db import get_auth_db
 from app.crypto import encrypt_for_desktop
@@ -44,7 +44,7 @@ def _derive_status(paid_this_fy: int, required: int, trial_expires: str | None) 
     return "EXPIRED"
 
 
-def _get_persons_rows(user_id: int, auth_db: Session) -> list[dict]:
+def _get_persons_rows(user_id: int, auth_db: Database) -> list[dict]:
     fy_start, fy_end = _fy_bounds()
 
     rows = auth_db.execute(
@@ -92,7 +92,7 @@ def _get_persons_rows(user_id: int, auth_db: Session) -> list[dict]:
 @router.get("")
 def list_persons(
     user: dict = Depends(get_current_user),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     """Website-safe endpoint — returns persons without masked_pan."""
     persons = _get_persons_rows(user["user_id"], auth_db)
@@ -106,7 +106,7 @@ def list_persons(
 def list_persons_secure(
     x_public_key: str = Header(..., alias="X-Public-Key"),
     user: dict = Depends(get_current_user),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     """Desktop endpoint — returns persons including masked_pan, encrypted with desktop's RSA public key."""
     persons = _get_persons_rows(user["user_id"], auth_db)
@@ -121,7 +121,7 @@ def list_persons_secure(
 def create_person(
     body: PersonCreate,
     user: dict = Depends(get_current_user),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     existing = auth_db.execute(
         text("SELECT person_id FROM persons WHERE user_id = :uid AND pan_hash = :ph"),
@@ -164,7 +164,7 @@ def create_person(
 def delete_person(
     person_id: int,
     user: dict = Depends(get_current_user),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     row = auth_db.execute(
         text("SELECT person_id FROM persons WHERE person_id = :pid AND user_id = :uid"),

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, Depends, Header, HTTPException, Request
 from jose import JWTError, jwt
-from sqlalchemy.orm import Session
+from arthdesk_db import Database
 from sqlalchemy import text
 
 from app.auth_db import get_auth_db
@@ -52,7 +52,7 @@ def _parse_metrics_header(value: str) -> tuple[int, int, str] | None:
         return None
 
 
-def _record_gains_header_bg(request: Request, person_id: int, user_id: int, auth_db: Session):
+def _record_gains_header_bg(request: Request, person_id: int, user_id: int, auth_db: Database):
     """Background task: parse X-App-Metrics and update underpaid_users table."""
     metrics_value = request.headers.get("X-App-Metrics")
     parsed = _parse_metrics_header(metrics_value) if metrics_value else None
@@ -151,7 +151,7 @@ def _send_underpaid_email(auth_db, user_id: int, required_price: int, underpaid_
 
 def get_current_user(
     authorization: str = Header(...),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ) -> dict:
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
@@ -175,7 +175,7 @@ def get_current_user(
 
 def require_active_subscription(
     user: dict = Depends(get_current_user),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ) -> dict:
     """
     Allow access for users with an ACTIVE or TRIAL subscription.

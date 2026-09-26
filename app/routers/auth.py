@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 from jose import jwt
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from arthdesk_db import Database
 
 from app.auth_db import get_auth_db
 from app.routers.deps import JWT_ALGORITHM, JWT_SECRET, get_current_user, require_admin
@@ -54,7 +54,7 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _store_refresh_token(auth_db: Session, user_id: int, raw_token: str) -> int:
+def _store_refresh_token(auth_db: Database, user_id: int, raw_token: str) -> int:
     expires_at = (datetime.now(timezone.utc) + timedelta(days=JWT_REFRESH_EXPIRES_DAYS)).isoformat()
     result = auth_db.execute(
         text("""
@@ -67,7 +67,7 @@ def _store_refresh_token(auth_db: Session, user_id: int, raw_token: str) -> int:
     return result.lastrowid
 
 
-def _subscription_info(auth_db: Session, user_id: int) -> dict | None:
+def _subscription_info(auth_db: Database, user_id: int) -> dict | None:
     row = auth_db.execute(
         text("""
             SELECT plan, status, expires_at
@@ -138,7 +138,7 @@ def admin_check(_: None = Depends(require_admin)):
 
 
 @router.post("/register", status_code=201)
-def register(req: RegisterRequest, auth_db: Session = Depends(get_auth_db)):
+def register(req: RegisterRequest, auth_db: Database = Depends(get_auth_db)):
     existing = auth_db.execute(
         text("SELECT user_id FROM users WHERE email = :email"),
         {"email": req.email},
@@ -160,7 +160,7 @@ def register(req: RegisterRequest, auth_db: Session = Depends(get_auth_db)):
 
 
 @router.post("/login")
-def login(req: LoginRequest, auth_db: Session = Depends(get_auth_db)):
+def login(req: LoginRequest, auth_db: Database = Depends(get_auth_db)):
     row = auth_db.execute(
         text("SELECT user_id, password_hash, is_active FROM users WHERE email = :email"),
         {"email": req.email},
@@ -183,7 +183,7 @@ def login(req: LoginRequest, auth_db: Session = Depends(get_auth_db)):
 
 
 @router.post("/refresh")
-def refresh(req: RefreshRequest, auth_db: Session = Depends(get_auth_db)):
+def refresh(req: RefreshRequest, auth_db: Database = Depends(get_auth_db)):
     token_hash = _sha256(req.refresh_token)
     row = auth_db.execute(
         text("""
@@ -224,7 +224,7 @@ def refresh(req: RefreshRequest, auth_db: Session = Depends(get_auth_db)):
 
 
 @router.post("/logout")
-def logout(req: LogoutRequest, auth_db: Session = Depends(get_auth_db)):
+def logout(req: LogoutRequest, auth_db: Database = Depends(get_auth_db)):
     token_hash = _sha256(req.refresh_token)
     auth_db.execute(
         text("UPDATE refresh_tokens SET revoked=1 WHERE token_hash=:hash"),
@@ -235,7 +235,7 @@ def logout(req: LogoutRequest, auth_db: Session = Depends(get_auth_db)):
 
 
 @router.get("/me")
-def me(user: dict = Depends(get_current_user), auth_db: Session = Depends(get_auth_db)):
+def me(user: dict = Depends(get_current_user), auth_db: Database = Depends(get_auth_db)):
     row = auth_db.execute(
         text("SELECT pan_salt FROM users WHERE user_id = :uid"),
         {"uid": user["user_id"]},
@@ -245,7 +245,7 @@ def me(user: dict = Depends(get_current_user), auth_db: Session = Depends(get_au
 
 
 @router.post("/forgot-password")
-def forgot_password(req: ForgotPasswordRequest, auth_db: Session = Depends(get_auth_db)):
+def forgot_password(req: ForgotPasswordRequest, auth_db: Database = Depends(get_auth_db)):
     row = auth_db.execute(
         text("SELECT user_id FROM users WHERE email = :email AND is_active=1"),
         {"email": req.email},
@@ -300,7 +300,7 @@ _RESET_FORM_HTML = """<!DOCTYPE html>
 
 
 @router.get("/reset-password", response_class=HTMLResponse)
-def reset_password_form(token: str, auth_db: Session = Depends(get_auth_db)):
+def reset_password_form(token: str, auth_db: Database = Depends(get_auth_db)):
     token_hash = _sha256(token)
     row = auth_db.execute(
         text("SELECT token_id, expires_at, used FROM password_reset_tokens WHERE token_hash=:hash"),
@@ -318,7 +318,7 @@ def reset_password_form(token: str, auth_db: Session = Depends(get_auth_db)):
 
 
 @router.post("/reset-password", response_class=HTMLResponse)
-async def reset_password(request: Request, auth_db: Session = Depends(get_auth_db)):
+async def reset_password(request: Request, auth_db: Database = Depends(get_auth_db)):
     form = await request.form()
     raw_token    = form.get("token", "")
     new_password = form.get("new_password", "")

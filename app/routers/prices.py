@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from arthdesk_db import Database
 from sqlalchemy import text
 
 from app.database import get_db
@@ -12,11 +12,10 @@ from app.routers.deps import require_active_subscription
 router = APIRouter()
 
 
-@router.get("/latest")
+@router.get("/latest", dependencies=[Depends(require_active_subscription)])
 def latest_prices(
     instrument_ids: List[int] = Query(None, description="List of server instrument_ids"),
     isins: List[str] = Query(None, description="[Legacy] List of ISINs the client holds"),
-    _user: dict = Depends(require_active_subscription),
 ):
     """
     Return today's latest price (OHLC) for each ISIN.
@@ -40,7 +39,7 @@ def latest_prices(
     return {"date": today.isoformat(), "prices": {}, "cache_miss": True}
 
 
-@router.get("/sync")
+@router.get("/sync", dependencies=[Depends(require_active_subscription)])
 def sync_prices(
     instrument_ids: List[int] = Query(
         None,
@@ -59,8 +58,7 @@ def sync_prices(
         description="Return latest_prices rows where last_synced_at > this ISO datetime. "
                     "Format: YYYY-MM-DDTHH:MM:SS  e.g. 2026-04-16T10:30:00",
     ),
-    db: Session = Depends(get_db),
-    _user: dict = Depends(require_active_subscription),
+    db: Database = Depends(get_db),
 ):
     """
     Incremental price sync.
@@ -170,7 +168,7 @@ def sync_prices(
 @router.get("/trading-calendar")
 def trading_calendar(
     year: int = Query(..., description="Calendar year e.g. 2026"),
-    db: Session = Depends(get_db),
+    db: Database = Depends(get_db),
 ):
     """Return market holidays for a given year."""
     rows = db.execute(

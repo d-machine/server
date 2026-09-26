@@ -3,7 +3,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from arthdesk_db import Database
 
 from app.auth_db import get_auth_db
 from app.routers.deps import get_current_user, require_admin
@@ -27,7 +27,7 @@ def _fy_bounds() -> tuple[str, str]:
 @router.get("/status")
 def subscription_status(
     user: dict = Depends(get_current_user),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     """Returns current subscription status for all persons of the logged-in user.
     One row per person (latest subscription). paid_this_fy = sum approved this FY."""
@@ -77,7 +77,7 @@ def subscription_status(
 @router.get("/history")
 def payment_history(
     user: dict = Depends(get_current_user),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     """Returns all APPROVED tickets for the logged-in user, newest first."""
     rows = auth_db.execute(text("""
@@ -122,7 +122,7 @@ def payment_history(
 @router.get("/admin/users")
 def admin_list_users(
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     rows = auth_db.execute(text("""
         SELECT u.user_id, u.email, u.name,
@@ -150,7 +150,7 @@ def admin_list_users(
 def admin_get_user(
     user_id: int,
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     user_row = auth_db.execute(
         text("SELECT user_id, email, name, created_at FROM users WHERE user_id=:uid"),
@@ -193,7 +193,7 @@ def admin_get_user(
 def admin_list_persons(
     status: str | None = None,
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     """
     Returns all persons with their subscription state.
@@ -239,7 +239,7 @@ def admin_list_persons(
 def admin_block_person(
     person_id: int,
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     prow = auth_db.execute(
         text("SELECT person_id FROM persons WHERE person_id=:pid"), {"pid": person_id}
@@ -259,7 +259,7 @@ def admin_block_person(
 def admin_unblock_person(
     person_id: int,
     _: None = Depends(require_admin),
-    auth_db: Session = Depends(get_auth_db),
+    auth_db: Database = Depends(get_auth_db),
 ):
     prow = auth_db.execute(
         text("SELECT person_id FROM persons WHERE person_id=:pid"), {"pid": person_id}

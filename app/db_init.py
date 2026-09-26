@@ -10,6 +10,17 @@ If you have an existing database, delete data/portfolio_server.db and re-run.
 
 from app.database import engine
 from sqlalchemy import text
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+from arthdesk_instruments import (
+    metadata as shared_metadata,
+    asset_classes,
+    tax_categories,
+    instrument_types,
+    ASSET_CLASSES_SEED,
+    TAX_CATEGORIES_SEED,
+    INSTRUMENT_TYPES_SEED,
+)
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -23,24 +34,21 @@ SCHEMA_SQL = [
     country TEXT NOT NULL DEFAULT 'IN'
 )""",
 
-"""CREATE TABLE IF NOT EXISTS asset_classes (
-    code  TEXT PRIMARY KEY,
-    name  TEXT NOT NULL
-)""",
-
-"""CREATE TABLE IF NOT EXISTS instrument_types (
-    instrument_type_id  INTEGER PRIMARY KEY,
-    name                TEXT NOT NULL UNIQUE,
-    asset_class         TEXT NOT NULL REFERENCES asset_classes(code),
-    tax_category        TEXT NOT NULL
-)""",
+# asset_classes / tax_categories / instrument_types are created and seeded by
+# _create_shared_instrument_tables() below, from the shared arthdesk_instruments
+# package — not here, so the server and arthdesk-py's client can't drift apart
+# on them again the way bse_symbol/MF/instrument_type did.
 
 # -- Hub table ---------------------------------------------------------------
-# Thin: only fields universal across every asset class.
+# Thin: only fields universal across every asset class. isin is additive here
+# for parity with the client's hub table (which has always had it) — the
+# server's own per-type tables (instrument_equity etc.) remain the primary
+# place isin lives for actual lookups; this is a nullable convenience column.
 """CREATE TABLE IF NOT EXISTS instruments (
     instrument_id      INTEGER PRIMARY KEY AUTOINCREMENT,
     name               TEXT NOT NULL,
     instrument_type_id INTEGER NOT NULL REFERENCES instrument_types(instrument_type_id),
+    isin               TEXT UNIQUE,
     is_active          INTEGER NOT NULL DEFAULT 1,
     created_at         TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
@@ -282,39 +290,28 @@ SEED_SQL = [
     "INSERT OR IGNORE INTO exchanges (code, name) VALUES ('MCX',  'Multi Commodity Exchange')",
     "INSERT OR IGNORE INTO exchanges (code, name) VALUES ('AMFI', 'Association of Mutual Funds in India')",
 
-    # Canonical asset_class codes — must match arthdesk-py's backend/enums.py::AssetClass
-    # exactly (that's the whole point of normalizing this into its own table: one
-    # source of truth both sides sync against instead of drifting independently).
-    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('EQUITY',       'Equity')",
-    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('INDEX',        'Index')",
-    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('MUTUAL_FUND',  'Mutual Fund')",
-    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('FIXED_INCOME', 'Fixed Income')",
-    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('DERIVATIVES',  'Derivatives')",
-    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('COMMODITY',    'Commodity')",
-    "INSERT OR IGNORE INTO asset_classes (code, name) VALUES ('PENDING',      'Pending')",
-
-    # instrument_type_id is pinned explicitly, not left to insertion order — this
-    # value is now part of the client/server wire protocol (both sides' copies of
-    # this table must assign the same id to the same type), so it can never be
-    # allowed to depend on the order rows happen to be listed here. Never
-    # renumber an existing id once shipped; only ever append a new one.
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (1,  'EQUITY',            'EQUITY',       'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (2,  'INDEX',             'INDEX',        'NA')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (3,  'EQUITY_MF',         'MUTUAL_FUND',  'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (4,  'DEBT_MF',           'MUTUAL_FUND',  'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (5,  'HYBRID_MF',         'MUTUAL_FUND',  'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (6,  'ELSS',              'MUTUAL_FUND',  'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (7,  'SIF',               'MUTUAL_FUND',  'EQUITY_LTCG')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (8,  'FD',                'FIXED_INCOME', 'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (9,  'BOND',              'FIXED_INCOME', 'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (10, 'PPF',               'FIXED_INCOME', 'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (11, 'NPS',               'FIXED_INCOME', 'DEBT')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (12, 'FUTURES',           'DERIVATIVES',  'NON_SPECULATIVE')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (13, 'OPTIONS',           'DERIVATIVES',  'NON_SPECULATIVE')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (14, 'COMMODITY_FUTURES', 'COMMODITY',    'NON_SPECULATIVE')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (15, 'COMMODITY_OPTIONS', 'COMMODITY',    'NON_SPECULATIVE')",
-    "INSERT OR IGNORE INTO instrument_types (instrument_type_id, name, asset_class, tax_category) VALUES (0,  'PENDING',           'PENDING',      'NA')",
+    # asset_classes / instrument_types seed data lives in arthdesk_instruments now —
+    # see _create_shared_instrument_tables() below.
 ]
+
+
+# ---------------------------------------------------------------------------
+# Shared instrument-identity tables (arthdesk_instruments)
+# ---------------------------------------------------------------------------
+def create_shared_instrument_tables(bind):
+    """
+    Create + seed asset_classes/tax_categories/instrument_types from the
+    shared arthdesk_instruments package. Idempotent (checkfirst on create,
+    INSERT OR IGNORE on seed) — safe to call on every startup, and reused
+    by tests/conftest.py so the in-memory test schema matches production.
+    """
+    shared_metadata.create_all(bind, checkfirst=True)
+    for table, seed in (
+        (asset_classes, ASSET_CLASSES_SEED),
+        (tax_categories, TAX_CATEGORIES_SEED),
+        (instrument_types, INSTRUMENT_TYPES_SEED),
+    ):
+        bind.execute(sqlite_insert(table).prefix_with("OR IGNORE"), seed)
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +324,7 @@ def init():
     with engine.begin() as conn:
         conn.execute(text("PRAGMA journal_mode=WAL"))
         conn.execute(text("PRAGMA foreign_keys=ON"))
+        create_shared_instrument_tables(conn)
         for stmt in SCHEMA_SQL:
             conn.execute(text(stmt))
         for stmt in INDEX_SQL:

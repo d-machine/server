@@ -29,12 +29,17 @@ os.environ.setdefault("SMTP_PASS", "")   # disable email sending in tests
 os.environ.setdefault("BASE_URL", "http://testserver")
 
 from app.auth_db_init import SCHEMA_SQL as AUTH_SCHEMA, INDEX_SQL as AUTH_INDEX
-from app.db_init import SCHEMA_SQL as MAIN_SCHEMA, INDEX_SQL as MAIN_INDEX, SEED_SQL
+from app.db_init import (
+    SCHEMA_SQL as MAIN_SCHEMA,
+    INDEX_SQL as MAIN_INDEX,
+    SEED_SQL,
+    create_shared_instrument_tables,
+)
 
 
 # ── In-memory DB factories ────────────────────────────────────────────────────
 
-def _make_engine(schema_sqls, index_sqls, seed_sqls=None):
+def _make_engine(schema_sqls, index_sqls, seed_sqls=None, shared_tables=False):
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -46,6 +51,10 @@ def _make_engine(schema_sqls, index_sqls, seed_sqls=None):
         conn.execute("PRAGMA foreign_keys=ON;")
 
     with engine.begin() as conn:
+        if shared_tables:
+            # asset_classes/tax_categories/instrument_types, from arthdesk_instruments —
+            # must exist before `instruments`' CREATE TABLE (schema_sqls below) for its FK.
+            create_shared_instrument_tables(conn)
         for stmt in schema_sqls:
             conn.execute(text(stmt))
         for stmt in index_sqls:
@@ -58,7 +67,7 @@ def _make_engine(schema_sqls, index_sqls, seed_sqls=None):
 
 @pytest.fixture(scope="function")
 def main_engine():
-    return _make_engine(MAIN_SCHEMA, MAIN_INDEX, SEED_SQL)
+    return _make_engine(MAIN_SCHEMA, MAIN_INDEX, SEED_SQL, shared_tables=True)
 
 
 @pytest.fixture(scope="function")

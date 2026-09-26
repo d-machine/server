@@ -1,29 +1,19 @@
 """
-SQLAlchemy Core Table definitions, matching app/db_init.py's raw DDL exactly.
+SQLAlchemy Core Table definitions used to build select()/insert()/update()/
+delete() statements executed via arthdesk_db.Database. Kept separate from
+app/models/*.py's (currently dead/unused, drifted) declarative classes.
 
-These are plain Core Table objects (not ORM declarative models) — used to
-build select()/insert()/update()/delete() statements executed via
-arthdesk_db.Database. Kept separate from app/models/*.py's (currently
-dead/unused, drifted) declarative classes.
+asset_classes/tax_categories/instrument_types/instruments come from
+arthdesk_instruments — the shared instrument-identity package — rather than
+being defined here, so the server and arthdesk-py's client can never drift
+apart on these again the way bse_symbol/MF/instrument_type did.
 
 Add tables here incrementally as routers are converted from raw text() SQL
 to Core statements — this file is not meant to mirror 100% of db_init.py on
 day one.
 """
-from sqlalchemy import MetaData, Table, Column, Integer, Text
+from arthdesk_instruments import asset_classes, tax_categories, instrument_types, make_instruments_table
 
-metadata = MetaData()
+instruments = make_instruments_table("instrument_id")
 
-asset_classes = Table(
-    "asset_classes", metadata,
-    Column("code", Text, primary_key=True),
-    Column("name", Text, nullable=False),
-)
-
-instrument_types = Table(
-    "instrument_types", metadata,
-    Column("instrument_type_id", Integer, primary_key=True),
-    Column("name", Text, nullable=False, unique=True),
-    Column("asset_class", Text, nullable=False),
-    Column("tax_category", Text, nullable=False),
-)
+__all__ = ["asset_classes", "tax_categories", "instrument_types", "instruments"]

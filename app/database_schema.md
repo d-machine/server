@@ -122,3 +122,61 @@ Not part of `arthdesk-instruments` — unrelated to instrument identity, untouch
 - `exchanges` (code/name/country — reference data for sources other than the instrument tables now)
 - `bhavcopy_files` (per-file sync tracking: status, rows_synced, error)
 - `trading_calendar` (market holidays)
+
+## Database access layering
+
+**No code queries the DB directly — everything goes through `arthdesk_db.Database`, which is
+then passed into `arthdesk_instruments.dao` for instrument queries.** This applies uniformly to
+FastAPI routers *and* background cron jobs, not just request-scoped code.
+
+```
+Router / cron job
+      │
+      ▼
+arthdesk_db.Database   (app/database.py — get_db() for requests, db_session() for cron jobs)
+      │
+      ▼
+arthdesk_instruments.dao.*   (duck-types on Database.execute — same calls work with a raw
+                               Connection too, which is how this stayed a drop-in change)
+```
+
+- **Routers** get a `Database` via FastAPI's `Depends(get_db)` — the existing, request-scoped
+  pattern. `app/routers/bhavcopy.py`'s `sync_inbox` is the latest example (was a raw
+  `engine.connect()` call despite already having a request lifecycle to hang a dependency off).
+- **Cron jobs have no request lifecycle** — they run as detached `threading.Thread`s kicked off
+  from `/admin/bhavcopy/parse`, so `Depends()` isn't available. They use `app/database.py`'s
+  `db_session()` context manager instead: constructs a `SessionLocal()`, wraps it in `Database`,
+  and closes the *session* directly in `finally` (`Database` itself has no `close()` — this
+  matches `arthdesk-db`'s own test-suite convention of the caller holding the session reference).
+- **One `Database`/one transaction per file**, not per step. `app/cron/bhavcopy/sync/{nse_eq,
+  bse_eq,nse_fo,bse_fo}.py`'s `run()` opens one `db_session()` per pending file, and everything
+  that file touches — resolving/creating/updating instruments, the `equity_eod`/`fo_eod` insert,
+  and the `bhavcopy_files` status update — happens on that one `Database` with a single
+  `db.commit()` at the end. This is a correctness improvement over the pre-fix version (today's
+  schema cutover, Phase 4), which opened a separate connection/transaction per step — a crash
+  mid-file could previously leave price rows written but the file still marked `DOWNLOADED`, or
+  vice versa; now it's all-or-nothing per file.
+- `app/cron/bhavcopy/sync/base.py` holds the adapters each sync job calls (`bulk_resolve_equity`,
+  `bulk_create_fo`, `get_or_create_index`, etc.) — every in-scope one takes `db` as its first
+  argument and does no internal connection management or commit; the caller (`run()`) commits
+  once. The still-deferred MF/MCX/prices helpers in the same file (`bulk_create_mf`,
+  `bulk_resolve_mcx`, `batch_upsert_latest_prices`, `_get_type_id`) are the one exception —
+  they still open their own `engine.connect()`/`engine.begin()`, since they serve paths that are
+  already broken pending their own DAO migration (see "Still TODO" below); fixing their access
+  pattern without fixing the underlying schema mismatch would be wasted effort.
+- `app/db_init.py`'s own `engine` usage is legitimate and out of scope: schema creation/bootstrap
+  (DDL) is a fundamentally different operation from querying, and `arthdesk_instruments.
+  init_schema()` itself takes a raw `engine` for the same reason — it manages its own
+  `engine.begin()` internally, so it can't be handed a `Database`/`Connection` that's already
+  inside another transaction.
+
+### Still TODO (known, deliberately deferred)
+
+- MF/MCX/prices querying in `base.py` and `app/routers/prices.py` / the MF branch of
+  `/instruments/search` — no shared DAO layer exists yet for these, so they're still on ad-hoc
+  raw SQL against a schema that's already drifted (see the warning at the top of this doc). They
+  get the `Database`-everywhere treatment in the same round their DAO migration happens, not
+  before.
+- `app/cron/bhavcopy/*.py` (the download/register side, not `sync/`) — a different lifecycle
+  stage of `bhavcopy_files` (download status, not sync status) and a separate concern from
+  instrument querying. Flagged, not yet migrated.

@@ -6,6 +6,11 @@ Reads downloaded BhavCopy_NSE_FO_*_F_0000.csv files.
 Lookup:  FinInstrmId -> instrument_derivatives.nse_bse_id (exchange='NSE') -> instr_id
 On miss: bulk-create all missing contracts.
 Writes:  fo_eod (exchange='NSE')
+
+All DB access for one file goes through a single arthdesk_db.Database,
+constructed via app.database.db_session() — one connection/transaction per
+file (covering every chunk), committed once, instead of a separate one per
+chunk/step.
 """
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ from datetime import datetime
 import pandas as pd
 from sqlalchemy import text
 
-from app.database import engine
+from app.database import db_session
 from app.cron.bhavcopy.sync.base import (
     get_pending_files, load_file_chunks, mark_synced, mark_failed,
     to_int, to_float,
@@ -37,7 +42,8 @@ _TYPE_MAP = {
 
 
 def run(force: bool = False) -> dict:
-    files = get_pending_files(SOURCE)
+    with db_session() as db:
+        files = get_pending_files(db, SOURCE)
     if not files:
         return _stats(0, 0, 0, [])
 
@@ -48,13 +54,17 @@ def run(force: bool = False) -> dict:
 
     for f in files:
         try:
-            rows = _process_file(f["file_name"], f["trade_date"])
-            mark_synced(f["file_name"], rows)
+            with db_session() as db:
+                rows = _process_file(db, f["file_name"], f["trade_date"])
+                mark_synced(db, f["file_name"], rows)
+                db.commit()
             total_rows += rows
             files_synced += 1
             logger.info("[%s] Synced %s -- %d rows", SOURCE, f["file_name"], rows)
         except Exception as exc:
-            mark_failed(f["file_name"], str(exc))
+            with db_session() as db:
+                mark_failed(db, f["file_name"], str(exc))
+                db.commit()
             files_failed += 1
             errors.append({"file": f["file_name"], "error": str(exc)})
             logger.error("[%s] Failed %s: %s", SOURCE, f["file_name"], exc, exc_info=True)
@@ -62,17 +72,17 @@ def run(force: bool = False) -> dict:
     return _stats(files_synced, files_failed, total_rows, errors)
 
 
-def _process_file(file_name: str, trade_date_str: str) -> int:
+def _process_file(db, file_name: str, trade_date_str: str) -> int:
     total = 0
     for i, chunk in enumerate(load_file_chunks(trade_date_str, file_name), 1):
         chunk.columns = chunk.columns.str.strip()
-        rows = _process_chunk(chunk, trade_date_str, file_name)
+        rows = _process_chunk(db, chunk, trade_date_str, file_name)
         logger.debug("[%s] %s chunk %d — %d rows", SOURCE, file_name, i, rows)
         total += rows
     return total
 
 
-def _process_chunk(df: pd.DataFrame, trade_date_str: str, file_name: str) -> int:
+def _process_chunk(db, df: pd.DataFrame, trade_date_str: str, file_name: str) -> int:
     # -- Pass 1: vectorized fin_id parsing ------------------------------------
     df = df.copy()
     df["fin_id_parsed"] = pd.to_numeric(
@@ -86,14 +96,14 @@ def _process_chunk(df: pd.DataFrame, trade_date_str: str, file_name: str) -> int
 
     # -- Pass 2: ONE SELECT for all unique fin_ids in this chunk, scoped to NSE --
     unique_fin_ids = df["fin_id_parsed"].unique().tolist()
-    id_map = bulk_resolve_fo_nse(unique_fin_ids)
+    id_map = bulk_resolve_fo_nse(db, unique_fin_ids)
 
     # -- Pass 3: batch-resolve underlyings, bulk-create whatever NSE doesn't have yet
     missing_ids = [fid for fid in unique_fin_ids if fid not in id_map]
     if missing_ids:
-        new_specs = _build_new_specs(missing_ids, df)
+        new_specs = _build_new_specs(db, missing_ids, df)
         if new_specs:
-            id_map.update(bulk_create_fo(new_specs, "NSE"))
+            id_map.update(bulk_create_fo(db, new_specs, "NSE"))
 
     # -- Pass 4: map instrument_ids vectorized --------------------------------
     df["inst_id_mapped"] = df["fin_id_parsed"].map(id_map)
@@ -129,36 +139,35 @@ def _process_chunk(df: pd.DataFrame, trade_date_str: str, file_name: str) -> int
         })
 
     if batch:
-        with engine.begin() as conn:
-            conn.execute(text("""
-                INSERT INTO fo_eod (
-                    instr_id, exchange, trade_date,
-                    open_price, high_price, low_price,
-                    close_price, last_price, prev_close_price,
-                    underlying_price, settlement_price,
-                    open_interest, oi_change, volume, traded_value_rupees, num_trades
-                ) VALUES (
-                    :instr_id, :exchange, :trade_date,
-                    :open_price, :high_price, :low_price,
-                    :close_price, :last_price, :prev_close_price,
-                    :underlying_price, :settlement_price,
-                    :open_interest, :oi_change, :volume, :traded_value_rupees, :num_trades
-                )
-                ON CONFLICT(instr_id, exchange, trade_date) DO UPDATE SET
-                    open_price=excluded.open_price,
-                    high_price=excluded.high_price,
-                    low_price=excluded.low_price,
-                    close_price=excluded.close_price,
-                    last_price=excluded.last_price,
-                    prev_close_price=excluded.prev_close_price,
-                    underlying_price=excluded.underlying_price,
-                    settlement_price=excluded.settlement_price,
-                    open_interest=excluded.open_interest,
-                    oi_change=excluded.oi_change,
-                    volume=excluded.volume,
-                    traded_value_rupees=excluded.traded_value_rupees,
-                    num_trades=excluded.num_trades
-            """), batch)
+        db.execute(text("""
+            INSERT INTO fo_eod (
+                instr_id, exchange, trade_date,
+                open_price, high_price, low_price,
+                close_price, last_price, prev_close_price,
+                underlying_price, settlement_price,
+                open_interest, oi_change, volume, traded_value_rupees, num_trades
+            ) VALUES (
+                :instr_id, :exchange, :trade_date,
+                :open_price, :high_price, :low_price,
+                :close_price, :last_price, :prev_close_price,
+                :underlying_price, :settlement_price,
+                :open_interest, :oi_change, :volume, :traded_value_rupees, :num_trades
+            )
+            ON CONFLICT(instr_id, exchange, trade_date) DO UPDATE SET
+                open_price=excluded.open_price,
+                high_price=excluded.high_price,
+                low_price=excluded.low_price,
+                close_price=excluded.close_price,
+                last_price=excluded.last_price,
+                prev_close_price=excluded.prev_close_price,
+                underlying_price=excluded.underlying_price,
+                settlement_price=excluded.settlement_price,
+                open_interest=excluded.open_interest,
+                oi_change=excluded.oi_change,
+                volume=excluded.volume,
+                traded_value_rupees=excluded.traded_value_rupees,
+                num_trades=excluded.num_trades
+        """), batch)
 
     if skipped:
         logger.debug("[%s] %s -- skipped %d rows", SOURCE, file_name, skipped)
@@ -166,7 +175,7 @@ def _process_chunk(df: pd.DataFrame, trade_date_str: str, file_name: str) -> int
     return len(batch)
 
 
-def _build_new_specs(missing_ids: list[int], df: pd.DataFrame) -> list[dict]:
+def _build_new_specs(db, missing_ids: list[int], df: pd.DataFrame) -> list[dict]:
     """
     Batch-resolve underlyings for all missing fin_ids (one lookup per unique
     symbol, not per fin_id), then build the create-spec for each.
@@ -217,10 +226,10 @@ def _build_new_specs(missing_ids: list[int], df: pd.DataFrame) -> list[dict]:
         return []
 
     unique_symbols = list({m["symbol"] for m in fid_meta.values()})
-    symbol_map = bulk_resolve_underlying_symbols(unique_symbols)
+    symbol_map = bulk_resolve_underlying_symbols(db, unique_symbols)
     for sym in unique_symbols:
         if sym not in symbol_map:
-            symbol_map[sym] = get_or_create_index(sym, EXCHANGE)
+            symbol_map[sym] = get_or_create_index(db, sym, EXCHANGE)
 
     new_specs: list[dict] = []
     for fid, meta in fid_meta.items():

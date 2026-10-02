@@ -39,35 +39,34 @@ def _get_type_id(name: str) -> Optional[int]:
 
 # -- File tracking ------------------------------------------------------------
 
-def get_pending_files(source: str) -> list[dict]:
+def get_pending_files(db, source: str) -> list[dict]:
     """Return all bhavcopy_files with status=DOWNLOADED for given source."""
-    with engine.connect() as conn:
-        rows = conn.execute(text("""
-            SELECT id, file_name, trade_date
-            FROM bhavcopy_files
-            WHERE source = :src AND status = :status
-            ORDER BY trade_date ASC
-        """), {"src": source, "status": int(FileStatus.DOWNLOADED)}).fetchall()
-    return [{"id": r[0], "file_name": r[1], "trade_date": r[2]} for r in rows]
+    rows = db.fetch_all(text("""
+        SELECT id, file_name, trade_date
+        FROM bhavcopy_files
+        WHERE source = :src AND status = :status
+        ORDER BY trade_date ASC
+    """), {"src": source, "status": int(FileStatus.DOWNLOADED)})
+    return [{"id": r["id"], "file_name": r["file_name"], "trade_date": r["trade_date"]} for r in rows]
 
 
-def mark_synced(file_name: str, rows_synced: int):
-    with engine.begin() as conn:
-        conn.execute(text("""
-            UPDATE bhavcopy_files
-            SET status=:status, rows_synced=:rows, error=NULL,
-                updated_at=datetime('now')
-            WHERE file_name=:fn
-        """), {"fn": file_name, "rows": rows_synced, "status": int(FileStatus.SYNCED)})
+def mark_synced(db, file_name: str, rows_synced: int):
+    """Does not commit — caller commits once per file alongside the data it just wrote."""
+    db.execute(text("""
+        UPDATE bhavcopy_files
+        SET status=:status, rows_synced=:rows, error=NULL,
+            updated_at=datetime('now')
+        WHERE file_name=:fn
+    """), {"fn": file_name, "rows": rows_synced, "status": int(FileStatus.SYNCED)})
 
 
-def mark_failed(file_name: str, error: str):
-    with engine.begin() as conn:
-        conn.execute(text("""
-            UPDATE bhavcopy_files
-            SET status=:status, error=:err, updated_at=datetime('now')
-            WHERE file_name=:fn
-        """), {"fn": file_name, "err": str(error)[:2000], "status": int(FileStatus.SYNC_FAILED)})
+def mark_failed(db, file_name: str, error: str):
+    """Does not commit — caller commits."""
+    db.execute(text("""
+        UPDATE bhavcopy_files
+        SET status=:status, error=:err, updated_at=datetime('now')
+        WHERE file_name=:fn
+    """), {"fn": file_name, "err": str(error)[:2000], "status": int(FileStatus.SYNC_FAILED)})
 
 
 def load_file_df(trade_date_str: str, file_name: str, **read_csv_kwargs) -> pd.DataFrame:
@@ -129,15 +128,14 @@ def to_float(val) -> Optional[float]:
 # bse_fo.py barely change; all old-shape-to-new-shape translation happens
 # here. mf/mcx/prices helpers further down are untouched/deferred.
 
-def bulk_resolve_equity(isins: list[str]) -> dict[str, int]:
+def bulk_resolve_equity(db, isins: list[str]) -> dict[str, int]:
     """isin -> instrument_id for all ISINs in the list."""
     if not isins:
         return {}
-    with engine.connect() as conn:
-        return dao.equity.bulk_resolve(conn, isins)
+    return dao.equity.bulk_resolve(db, isins)
 
 
-def bulk_create_equity(missing: list[dict]) -> dict[str, int]:
+def bulk_create_equity(db, missing: list[dict]) -> dict[str, int]:
     """
     Bulk-create instruments for ISINs not yet in the master.
     Each item in missing: {isin, name?, nse_symbol?, nse_id?, bse_code?,
@@ -145,6 +143,7 @@ def bulk_create_equity(missing: list[dict]) -> dict[str, int]:
     bse_eq.py compute this directly via to_float now, no more paise
     round-trip). 'nse_symbol'/'bse_code' are the legacy key names; 'nse_id'/
     'bse_id'/'bse_sym' are accepted directly too. Returns {isin: instrument_id}.
+    Does not commit — caller commits once per file.
     """
     if not missing:
         return {}
@@ -159,20 +158,20 @@ def bulk_create_equity(missing: list[dict]) -> dict[str, int]:
             "bse_id": item.get("bse_id"),
             "face_value": item.get("face_value"),
         })
-    with engine.begin() as conn:
-        result = dao.equity.bulk_create(conn, rows)
+    result = dao.equity.bulk_create(db, rows)
     for isin, instrument_id in result.items():
         logger.info("[base] Created EQUITY %d: %s", instrument_id, isin)
     return result
 
 
-def bulk_update_equity_fields(updates: list[dict]):
+def bulk_update_equity_fields(db, updates: list[dict]):
     """
     Update metadata for existing equity instruments from bhavcopy.
     Each item: {instrument_id, name?, nse_symbol?, nse_id?, bse_code?,
     bse_id?, face_value?} — face_value is REAL rupees. 'name' has no home on
     instrument_equity anymore (nse_name/bse_name instead) — silently dropped
-    if passed, since no current caller actually provides it.
+    if passed, since no current caller actually provides it. Does not
+    commit — caller commits.
     """
     if not updates:
         return
@@ -190,27 +189,24 @@ def bulk_update_equity_fields(updates: list[dict]):
         if item.get("face_value") is not None:
             fields["face_value"] = item["face_value"]
         translated.append(fields)
-    with engine.begin() as conn:
-        dao.equity.update_fields(conn, translated)
+    dao.equity.update_fields(db, translated)
 
 
-def bulk_resolve_fo_nse(fin_ids: list[int]) -> dict[int, int]:
+def bulk_resolve_fo_nse(db, fin_ids: list[int]) -> dict[int, int]:
     """nse_bse_id -> instrument_id, scoped to NSE."""
     if not fin_ids:
         return {}
-    with engine.connect() as conn:
-        return dao.derivatives.bulk_resolve_by_id(conn, "NSE", fin_ids)
+    return dao.derivatives.bulk_resolve_by_id(db, "NSE", fin_ids)
 
 
-def bulk_resolve_fo_bse(fin_ids: list[int]) -> dict[int, int]:
+def bulk_resolve_fo_bse(db, fin_ids: list[int]) -> dict[int, int]:
     """nse_bse_id -> instrument_id, scoped to BSE."""
     if not fin_ids:
         return {}
-    with engine.connect() as conn:
-        return dao.derivatives.bulk_resolve_by_id(conn, "BSE", fin_ids)
+    return dao.derivatives.bulk_resolve_by_id(db, "BSE", fin_ids)
 
 
-def bulk_resolve_underlying_symbols(symbols: list[str]) -> dict[str, int]:
+def bulk_resolve_underlying_symbols(db, symbols: list[str]) -> dict[str, int]:
     """symbol -> underlying instrument_id, looping dao.derivatives.resolve_underlying
     per unique symbol (no bulk primitive for this — deliberate, see Phase 3/4
     plan: a bounded number of unique underlyings per file, each a cheap local
@@ -218,11 +214,10 @@ def bulk_resolve_underlying_symbols(symbols: list[str]) -> dict[str, int]:
     if not symbols:
         return {}
     result: dict[str, int] = {}
-    with engine.connect() as conn:
-        for sym in symbols:
-            instr_id = dao.derivatives.resolve_underlying(conn, sym, "NSE")
-            if instr_id is not None:
-                result[sym] = instr_id
+    for sym in symbols:
+        instr_id = dao.derivatives.resolve_underlying(db, sym, "NSE")
+        if instr_id is not None:
+            result[sym] = instr_id
     return result
 
 
@@ -273,22 +268,20 @@ def bulk_resolve_amfi(codes: list[str]) -> dict[str, int]:
 # get_fo_instrument_by_contract removed along with its cross-exchange-dedup
 # callers above — see note there.
 
-def get_underlying_instrument_id(symbol: str) -> Optional[int]:
+def get_underlying_instrument_id(db, symbol: str) -> Optional[int]:
     """Behavior change, intentional: checks instrument_index before
     instrument_equity now (today's old code checked equity first) — this is
     the NIFTY-vs-NIFTYBEES fix (Phase 3's dao.derivatives.resolve_underlying),
     finally taking effect for BSE's sync path."""
-    with engine.connect() as conn:
-        return dao.derivatives.resolve_underlying(conn, symbol, "BSE")
+    return dao.derivatives.resolve_underlying(db, symbol, "BSE")
 
 
-def get_or_create_index(symbol: str, exchange: str = "NSE") -> int:
+def get_or_create_index(db, symbol: str, exchange: str = "NSE") -> int:
     """`exchange` accepted for call-site compatibility but ignored —
     instrument_index has no exchange column (Phase 2: small, curated,
-    hand-seeded table where symbols don't collide across exchanges).
-    Uses engine.begin() (not connect()) since this can write a new row."""
-    with engine.begin() as conn:
-        return dao.index.get_or_create(conn, symbol)
+    hand-seeded table where symbols don't collide across exchanges). Does
+    not commit — caller commits (this can write a new row)."""
+    return dao.index.get_or_create(db, symbol)
 
 
 def get_or_create_mf(amfi_code: str, name: str, fund_house: str = None,
@@ -356,7 +349,7 @@ def batch_upsert_latest_prices(rows: list[dict]):
 
 # -- Bulk create helpers -------------------------------------------------------
 
-def bulk_create_fo(missing: list[dict], exchange: str) -> dict[int, int]:
+def bulk_create_fo(db, missing: list[dict], exchange: str) -> dict[int, int]:
     """
     Bulk-create FO instruments.
     Each item in missing: {fin_id, name, inst_kind, underlying_id, symbol,
@@ -368,6 +361,7 @@ def bulk_create_fo(missing: list[dict], exchange: str) -> dict[int, int]:
     Returns {fin_id: instrument_id}. This is also where the old
     instrument_type-vs-contract_type column bug is fixed by construction —
     dao.derivatives.bulk_create only ever writes real Core-defined columns.
+    Does not commit — caller commits once per file.
     """
     if not missing:
         return {}
@@ -382,8 +376,7 @@ def bulk_create_fo(missing: list[dict], exchange: str) -> dict[int, int]:
         "lot_size": item.get("lot_size"),
         "instrument_type_name": item["inst_kind"],
     } for item in missing]
-    with engine.begin() as conn:
-        result = dao.derivatives.bulk_create(conn, exchange, rows)
+    result = dao.derivatives.bulk_create(db, exchange, rows)
     for fin_id, instrument_id in result.items():
         logger.debug("[base] Created FO instrument %d (fin_id=%s)", instrument_id, fin_id)
     return result

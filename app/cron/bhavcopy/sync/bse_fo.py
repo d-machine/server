@@ -8,6 +8,10 @@ Writes:  fo_eod (exchange='BSE')
 No cross-exchange contract matching (removed) — NSE and BSE F&O contracts
 are separate rows by design (exchange discriminator), so a BSE sync never
 links to a row NSE's sync created, and vice versa.
+
+All DB access for one file goes through a single arthdesk_db.Database,
+constructed via app.database.db_session() — one connection/transaction per
+file, committed once, instead of a separate one per step.
 """
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ from datetime import datetime
 import pandas as pd
 from sqlalchemy import text
 
-from app.database import engine
+from app.database import db_session
 from app.cron.bhavcopy.sync.base import (
     get_pending_files, load_file_df, mark_synced, mark_failed,
     to_int, to_float,
@@ -38,7 +42,8 @@ _TYPE_MAP = {
 
 
 def run(force: bool = False) -> dict:
-    files = get_pending_files(SOURCE)
+    with db_session() as db:
+        files = get_pending_files(db, SOURCE)
     if not files:
         return _stats(0, 0, 0, [])
 
@@ -49,13 +54,17 @@ def run(force: bool = False) -> dict:
 
     for f in files:
         try:
-            rows = _process_file(f["file_name"], f["trade_date"])
-            mark_synced(f["file_name"], rows)
+            with db_session() as db:
+                rows = _process_file(db, f["file_name"], f["trade_date"])
+                mark_synced(db, f["file_name"], rows)
+                db.commit()
             total_rows += rows
             files_synced += 1
             logger.info("[%s] Synced %s -- %d rows", SOURCE, f["file_name"], rows)
         except Exception as exc:
-            mark_failed(f["file_name"], str(exc))
+            with db_session() as db:
+                mark_failed(db, f["file_name"], str(exc))
+                db.commit()
             files_failed += 1
             errors.append({"file": f["file_name"], "error": str(exc)})
             logger.error("[%s] Failed %s: %s", SOURCE, f["file_name"], exc, exc_info=True)
@@ -63,7 +72,7 @@ def run(force: bool = False) -> dict:
     return _stats(files_synced, files_failed, total_rows, errors)
 
 
-def _process_file(file_name: str, trade_date_str: str) -> int:
+def _process_file(db, file_name: str, trade_date_str: str) -> int:
     df = load_file_df(trade_date_str, file_name, dtype=str)
     df.columns = df.columns.str.strip()
 
@@ -83,13 +92,13 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
         return 0
 
     unique_fin_ids = list({fid for fid, _ in parsed_rows})
-    id_map         = bulk_resolve_fo_bse(unique_fin_ids)
+    id_map         = bulk_resolve_fo_bse(db, unique_fin_ids)
 
     missing_ids = [fid for fid in unique_fin_ids if fid not in id_map]
     if missing_ids:
-        new_specs = _build_new_specs(missing_ids, parsed_rows)
+        new_specs = _build_new_specs(db, missing_ids, parsed_rows)
         if new_specs:
-            new_ids = bulk_create_fo(new_specs, "BSE")
+            new_ids = bulk_create_fo(db, new_specs, "BSE")
             id_map.update(new_ids)
 
     batch = []
@@ -120,36 +129,35 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
         })
 
     if batch:
-        with engine.begin() as conn:
-            conn.execute(text("""
-                INSERT INTO fo_eod (
-                    instr_id, exchange, trade_date,
-                    open_price, high_price, low_price,
-                    close_price, last_price, prev_close_price,
-                    underlying_price, settlement_price,
-                    open_interest, oi_change, volume, traded_value_rupees, num_trades
-                ) VALUES (
-                    :instr_id, :exchange, :trade_date,
-                    :open_price, :high_price, :low_price,
-                    :close_price, :last_price, :prev_close_price,
-                    :underlying_price, :settlement_price,
-                    :open_interest, :oi_change, :volume, :traded_value_rupees, :num_trades
-                )
-                ON CONFLICT(instr_id, exchange, trade_date) DO UPDATE SET
-                    open_price=excluded.open_price,
-                    high_price=excluded.high_price,
-                    low_price=excluded.low_price,
-                    close_price=excluded.close_price,
-                    last_price=excluded.last_price,
-                    prev_close_price=excluded.prev_close_price,
-                    underlying_price=excluded.underlying_price,
-                    settlement_price=excluded.settlement_price,
-                    open_interest=excluded.open_interest,
-                    oi_change=excluded.oi_change,
-                    volume=excluded.volume,
-                    traded_value_rupees=excluded.traded_value_rupees,
-                    num_trades=excluded.num_trades
-            """), batch)
+        db.execute(text("""
+            INSERT INTO fo_eod (
+                instr_id, exchange, trade_date,
+                open_price, high_price, low_price,
+                close_price, last_price, prev_close_price,
+                underlying_price, settlement_price,
+                open_interest, oi_change, volume, traded_value_rupees, num_trades
+            ) VALUES (
+                :instr_id, :exchange, :trade_date,
+                :open_price, :high_price, :low_price,
+                :close_price, :last_price, :prev_close_price,
+                :underlying_price, :settlement_price,
+                :open_interest, :oi_change, :volume, :traded_value_rupees, :num_trades
+            )
+            ON CONFLICT(instr_id, exchange, trade_date) DO UPDATE SET
+                open_price=excluded.open_price,
+                high_price=excluded.high_price,
+                low_price=excluded.low_price,
+                close_price=excluded.close_price,
+                last_price=excluded.last_price,
+                prev_close_price=excluded.prev_close_price,
+                underlying_price=excluded.underlying_price,
+                settlement_price=excluded.settlement_price,
+                open_interest=excluded.open_interest,
+                oi_change=excluded.oi_change,
+                volume=excluded.volume,
+                traded_value_rupees=excluded.traded_value_rupees,
+                num_trades=excluded.num_trades
+        """), batch)
 
     if skipped:
         logger.debug("[%s] %s -- skipped %d rows", SOURCE, file_name, skipped)
@@ -157,7 +165,7 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
     return len(batch)
 
 
-def _build_new_specs(missing_ids: list[int], parsed_rows: list) -> list[dict]:
+def _build_new_specs(db, missing_ids: list[int], parsed_rows: list) -> list[dict]:
     fid_to_row: dict[int, object] = {}
     for fid, row in parsed_rows:
         if fid in missing_ids and fid not in fid_to_row:
@@ -185,9 +193,9 @@ def _build_new_specs(missing_ids: list[int], parsed_rows: list) -> list[dict]:
             strike_paise = 0
         option_type = option_raw if option_raw in ("CE", "PE") else "-"
 
-        underlying_id = get_underlying_instrument_id(symbol)
+        underlying_id = get_underlying_instrument_id(db, symbol)
         if underlying_id is None:
-            underlying_id = get_or_create_index(symbol, "BSE")
+            underlying_id = get_or_create_index(db, symbol, "BSE")
 
         inst_kind = _TYPE_MAP.get(instr_type, "FUTURES")
         name = (f"{symbol} {expiry_date} {strike_raw} {option_type}"

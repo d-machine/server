@@ -19,9 +19,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import text
 
+from arthdesk_db import Database
+
+from app.database import get_db
 from app.cron.bhavcopy import nse_eq, nse_fo, bse_eq, bse_fo, amfi, mcx2
 from app.cron.bhavcopy.common import gcs_blob_name, gcs_blob_exists
 from app.cron.bhavcopy.constants import FileStatus
@@ -119,15 +123,12 @@ def _error_file_path(job_id: str) -> Path:
     return ERRORS_DIR / f"{job_id}.json"
 
 
-def _db_status(fname: str) -> Optional[str]:
-    from app.database import engine
-    from sqlalchemy import text
-    with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT status FROM bhavcopy_files WHERE file_name=:fn"),
-            {"fn": fname}
-        ).first()
-    return row[0] if row else None
+def _db_status(db: Database, fname: str) -> Optional[str]:
+    row = db.fetch_one(
+        text("SELECT status FROM bhavcopy_files WHERE file_name=:fn"),
+        {"fn": fname}
+    )
+    return row["status"] if row else None
 
 
 def _match_inbox_file(filename: str):
@@ -235,7 +236,7 @@ def download_bhavcopy(
 
 
 @router.post("/sync-inbox", response_model=SyncInboxResponse)
-def sync_inbox(force: bool = False):
+def sync_inbox(db: Database = Depends(get_db), force: bool = False):
     """
     Scan /app/inbox/ for original NSE/BSE bhavcopy files and register them.
     """
@@ -264,7 +265,7 @@ def sync_inbox(force: bool = False):
         source_id, date_str, saved_fname = info
         trade_date = datetime.strptime(date_str, "%Y%m%d").date()
         blob       = gcs_blob_name(trade_date, saved_fname)
-        status     = _db_status(saved_fname)
+        status     = _db_status(db, saved_fname)
 
         if status == FileStatus.SYNCED:
             blocked.append(src.name)

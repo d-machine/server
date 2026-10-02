@@ -33,8 +33,8 @@ from app.db_init import (
     SCHEMA_SQL as MAIN_SCHEMA,
     INDEX_SQL as MAIN_INDEX,
     SEED_SQL,
-    create_shared_instrument_tables,
 )
+from arthdesk_instruments import init_schema
 
 
 # ── In-memory DB factories ────────────────────────────────────────────────────
@@ -50,11 +50,13 @@ def _make_engine(schema_sqls, index_sqls, seed_sqls=None, shared_tables=False):
     def on_connect(conn, _):
         conn.execute("PRAGMA foreign_keys=ON;")
 
+    if shared_tables:
+        # instruments + every detail/price table, from arthdesk_instruments —
+        # manages its own transaction, so called before the block below rather
+        # than from inside it.
+        init_schema(engine)
+
     with engine.begin() as conn:
-        if shared_tables:
-            # asset_classes/tax_categories/instrument_types, from arthdesk_instruments —
-            # must exist before `instruments`' CREATE TABLE (schema_sqls below) for its FK.
-            create_shared_instrument_tables(conn)
         for stmt in schema_sqls:
             conn.execute(text(stmt))
         for stmt in index_sqls:
@@ -191,24 +193,36 @@ def bearer_with_sub(registered_user, active_subscription):
 # ── Instrument seed helper ────────────────────────────────────────────────────
 
 def seed_equity(main_engine, isin="INE123456789", symbol="TESTSYM", name="Test Corp"):
-    """Insert a minimal equity instrument directly into the test DB."""
+    """Insert a minimal equity instrument directly into the test DB, via the
+    DAO layer rather than hand-written SQL against arthdesk_instruments'
+    schema (which this helper shouldn't need to know the shape of)."""
+    from arthdesk_instruments import dao
+
     with main_engine.begin() as conn:
-        # Get EQUITY type id
-        row = conn.execute(
-            text("SELECT instrument_type_id FROM instrument_types WHERE name='EQUITY'")
-        ).fetchone()
-        type_id = row[0]
+        result = dao.equity.create(conn, isin=isin, nse_sym=symbol, nse_name=name)
+        return result["instr_id"]
 
-        conn.execute(text("""
-            INSERT INTO instruments (name, instrument_type_id, is_active)
-            VALUES (:name, :tid, 1)
-        """), {"name": name, "tid": type_id})
 
-        iid = conn.execute(text("SELECT last_insert_rowid()")).scalar()
+def seed_index(main_engine, sym="NIFTY"):
+    """Insert a minimal index instrument directly into the test DB."""
+    from arthdesk_instruments import dao
 
-        conn.execute(text("""
-            INSERT INTO instrument_equity (instrument_id, isin, nse_symbol)
-            VALUES (:iid, :isin, :sym)
-        """), {"iid": iid, "isin": isin, "sym": symbol})
+    with main_engine.begin() as conn:
+        return dao.index.get_or_create(conn, sym)
 
-        return iid
+
+def seed_derivative(main_engine, exchange="NSE", nse_bse_id=1001, ul_instr_id=None,
+                     contract_type="FUTURES", expd="2026-12-31"):
+    """Insert a minimal derivatives contract directly into the test DB.
+    Auto-creates an underlying equity if ul_instr_id isn't given."""
+    from arthdesk_instruments import dao
+
+    with main_engine.begin() as conn:
+        if ul_instr_id is None:
+            ul_instr_id = dao.equity.create(conn, isin="INE000UNDLY1", nse_sym="UNDLY")["instr_id"]
+        result = dao.derivatives.bulk_create(conn, exchange, [{
+            "nse_bse_id": nse_bse_id, "nse_bse_name": "TEST CONTRACT", "ul_instr_id": ul_instr_id,
+            "contract_type": contract_type, "expd": expd, "strkp": 0.0, "opn_type": "-",
+            "lot_size": 1, "instrument_type_name": contract_type,
+        }])
+        return result[nse_bse_id]

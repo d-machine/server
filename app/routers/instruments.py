@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -5,11 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from arthdesk_db import Database
 from sqlalchemy import text, select
+from arthdesk_instruments import dao
 from app.database import get_db
 from app.routers.deps import require_active_subscription
 from app.tables import instrument_types, asset_classes
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MF_TYPES  = {"EQUITY_MF", "DEBT_MF", "HYBRID_MF", "ELSS", "SIF"}
 FO_TYPES  = {"FUTURES", "OPTIONS"}
@@ -53,14 +56,13 @@ class CreateEquityRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _base(ref: PendingRef, row, **extra) -> dict:
+def _base(ref: PendingRef, instrument_id: int, instrument_type_name: str, name: str, **extra) -> dict:
     """Return a fully-populated resolved dict; all type-specific fields default to None."""
     return {
         "pending_id":               ref.pending_id,
-        "instrument_id":            row["instrument_id"],
-        "instrument_type_id":       row["instrument_type_id"],
-        "instrument_type_name":     row["type"],
-        "name":                     row["name"],
+        "instrument_id":            instrument_id,
+        "instrument_type_name":     instrument_type_name,
+        "name":                     name,
         "primary_exchange_code":    None,
         "isin":                     None,
         "nse_symbol":               None,
@@ -89,87 +91,65 @@ def _base(ref: PendingRef, row, **extra) -> dict:
     }
 
 
-def _resolve_equity(ref: PendingRef, db: Database) -> Optional[dict]:
-    row = None
-
-    if ref.isin:
-        row = db.execute(text("""
-            SELECT i.instrument_id, i.instrument_type_id, it.name AS type, i.name,
-                   ie.isin, ie.nse_symbol, ie.nse_fininstrmid, ie.bse_code
-            FROM instruments i
-            JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-            JOIN instrument_equity ie ON ie.instrument_id = i.instrument_id
-            WHERE ie.isin = :isin AND i.is_active = 1
-        """), {"isin": ref.isin.upper()}).mappings().first()
-
-    if row is None and ref.nse_symbol:
-        row = db.execute(text("""
-            SELECT i.instrument_id, i.instrument_type_id, it.name AS type, i.name,
-                   ie.isin, ie.nse_symbol, ie.nse_fininstrmid, ie.bse_code
-            FROM instruments i
-            JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-            JOIN instrument_equity ie ON ie.instrument_id = i.instrument_id
-            WHERE UPPER(ie.nse_symbol) = :sym AND i.is_active = 1
-        """), {"sym": ref.nse_symbol.upper()}).mappings().first()
-
-    if row is None and ref.bse_code:
-        row = db.execute(text("""
-            SELECT i.instrument_id, i.instrument_type_id, it.name AS type, i.name,
-                   ie.isin, ie.nse_symbol, ie.nse_fininstrmid, ie.bse_code
-            FROM instruments i
-            JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-            JOIN instrument_equity ie ON ie.instrument_id = i.instrument_id
-            WHERE ie.bse_code = :code AND i.is_active = 1
-        """), {"code": ref.bse_code}).mappings().first()
-
+def _resolve_equity_via_dao(ref: PendingRef, db: Database) -> Optional[dict]:
+    row = dao.resolve(db, "EQUITY", isin=ref.isin, nse_sym=ref.nse_symbol,
+                       nse_id=ref.nse_fininstrmid, bse_sym=ref.bse_code)
     if not row:
         return None
-
-    return _base(ref, row,
+    name = row.get("nse_name") or row.get("bse_name") or ref.isin
+    return _base(ref, row["instr_id"], "EQUITY", name,
         isin=row["isin"],
-        nse_symbol=row["nse_symbol"],
-        nse_equity_fininstrmid=row["nse_fininstrmid"],
-        bse_code=row["bse_code"],
+        nse_symbol=row["nse_sym"],
+        nse_equity_fininstrmid=row["nse_id"],
+        bse_code=row["bse_id"],
     )
 
 
-def _resolve_index(ref: PendingRef, db: Database) -> Optional[dict]:
-    row = None
+def _resolve_index_via_dao(ref: PendingRef, db: Database) -> Optional[dict]:
     sym = (ref.nse_symbol or "").upper()
+    if not sym:
+        return None
+    row = dao.resolve(db, "INDEX", sym=sym)
+    if not row:
+        return None
+    return _base(ref, row["instr_id"], "INDEX", row["sym"],
+        primary_exchange_code=ref.exchange,
+        index_symbol=row["sym"],
+        index_exchange=ref.exchange,
+    )
 
-    if sym and ref.exchange:
-        row = db.execute(text("""
-            SELECT i.instrument_id, i.instrument_type_id, it.name AS type, i.name,
-                   ii.symbol, ii.exchange
-            FROM instruments i
-            JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-            JOIN instrument_index ii ON ii.instrument_id = i.instrument_id
-            WHERE UPPER(ii.symbol) = :sym AND UPPER(ii.exchange) = :exch
-              AND i.is_active = 1
-        """), {"sym": sym, "exch": ref.exchange.upper()}).mappings().first()
 
-    if row is None and sym:
-        row = db.execute(text("""
-            SELECT i.instrument_id, i.instrument_type_id, it.name AS type, i.name,
-                   ii.symbol, ii.exchange
-            FROM instruments i
-            JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-            JOIN instrument_index ii ON ii.instrument_id = i.instrument_id
-            WHERE UPPER(ii.symbol) = :sym AND i.is_active = 1
-            LIMIT 1
-        """), {"sym": sym}).mappings().first()
+def _resolve_fo_via_dao(ref: PendingRef, db: Database) -> Optional[dict]:
+    ul_instr_id = None
+    if ref.underlying_symbol and ref.exchange:
+        ul_instr_id = dao.derivatives.resolve_underlying(db, ref.underlying_symbol, ref.exchange)
 
+    strkp = ref.strike_price_paise / 100 if ref.strike_price_paise is not None else None
+    row = dao.resolve(db, "DERIVATIVES", exchange=ref.exchange, nse_bse_id=ref.nse_fininstrmid,
+                       ul_instr_id=ul_instr_id, expd=ref.expiry_date, strkp=strkp,
+                       opn_type=ref.contract_type)
     if not row:
         return None
 
-    return _base(ref, row,
-        primary_exchange_code=row["exchange"],
-        index_symbol=row["symbol"],
-        index_exchange=row["exchange"],
+    nse_fin = row["nse_bse_id"] if row["exchange"] == "NSE" else None
+    bse_fin = row["nse_bse_id"] if row["exchange"] == "BSE" else None
+    return _base(ref, row["instr_id"], "DERIVATIVES", row.get("nse_bse_name") or "",
+        underlying_instrument_id=row["ul_instr_id"],
+        underlying_symbol=ref.underlying_symbol,
+        fo_expiry_date=row["expd"],
+        fo_lot_size=row["lot_size"],
+        fo_strike_price_paise=int(round(row["strkp"] * 100)) if row["strkp"] is not None else None,
+        fo_contract_type=row["contract_type"],
+        fo_option_type=row["opn_type"],
+        fo_nse_fininstrmid=nse_fin,
+        fo_bse_fininstrmid=bse_fin,
     )
 
 
 def _resolve_mf(ref: PendingRef, db: Database) -> Optional[dict]:
+    """Not migrated this round (dao.mf doesn't exist yet) — references the
+    old schema, will raise if actually invoked. Call site wraps this in
+    try/except so it can't take down resolution of other refs in a batch."""
     row = None
 
     if ref.amfi_code:
@@ -195,75 +175,16 @@ def _resolve_mf(ref: PendingRef, db: Database) -> Optional[dict]:
     if not row:
         return None
 
-    return _base(ref, row,
+    return _base(ref, row["instrument_id"], row["type"], row["name"],
         primary_exchange_code="AMFI",
         amfi_code=row["amfi_code"],
     )
 
 
-def _resolve_fo(ref: PendingRef, db: Database) -> Optional[dict]:
-    row = None
-
-    if ref.nse_fininstrmid:
-        row = db.execute(text("""
-            SELECT i.instrument_id, i.instrument_type_id, it.name AS type, i.name,
-                   ifo.underlying_instrument_id, ifo.underlying_symbol,
-                   ifo.contract_type AS fo_contract_type,
-                   ifo.option_type AS fo_option_type,
-                   ifo.expiry_date, ifo.strike_price_paise,
-                   ifo.lot_size, ifo.nse_fininstrmid, ifo.bse_fininstrmid
-            FROM instruments i
-            JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-            JOIN instrument_derivatives ifo ON ifo.instrument_id = i.instrument_id
-            WHERE ifo.nse_fininstrmid = :fid AND i.is_active = 1
-        """), {"fid": ref.nse_fininstrmid}).mappings().first()
-
-    if row is None and ref.underlying_symbol and ref.expiry_date:
-        itype = (ref.contract_type or "FUTURES").upper()
-        params: dict = {
-            "sym":   ref.underlying_symbol.upper(),
-            "exp":   ref.expiry_date,
-            "itype": itype,
-        }
-        strike_clause = ""
-        if ref.strike_price_paise is not None:
-            params["strike"] = ref.strike_price_paise
-            strike_clause = " AND ifo.strike_price_paise = :strike"
-
-        row = db.execute(text(f"""
-            SELECT i.instrument_id, i.instrument_type_id, it.name AS type, i.name,
-                   ifo.underlying_instrument_id, ifo.underlying_symbol,
-                   ifo.contract_type AS fo_contract_type,
-                   ifo.option_type AS fo_option_type,
-                   ifo.expiry_date, ifo.strike_price_paise,
-                   ifo.lot_size, ifo.nse_fininstrmid, ifo.bse_fininstrmid
-            FROM instruments i
-            JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-            JOIN instrument_derivatives ifo ON ifo.instrument_id = i.instrument_id
-            WHERE UPPER(ifo.underlying_symbol) = :sym
-              AND ifo.expiry_date = :exp
-              AND ifo.contract_type = :itype
-              AND i.is_active = 1{strike_clause}
-            LIMIT 1
-        """), params).mappings().first()
-
-    if not row:
-        return None
-
-    return _base(ref, row,
-        underlying_instrument_id=row["underlying_instrument_id"],
-        underlying_symbol=row["underlying_symbol"],
-        fo_expiry_date=row["expiry_date"],
-        fo_lot_size=row["lot_size"],
-        fo_strike_price_paise=row["strike_price_paise"],
-        fo_contract_type=row["fo_contract_type"],
-        fo_option_type=row["fo_option_type"],
-        fo_nse_fininstrmid=row["nse_fininstrmid"],
-        fo_bse_fininstrmid=row["bse_fininstrmid"],
-    )
-
-
 def _resolve_mcx(ref: PendingRef, db: Database) -> Optional[dict]:
+    """Not migrated this round (dao.mcx doesn't exist yet) — references the
+    old schema, will raise if actually invoked. Call site wraps this in
+    try/except so it can't take down resolution of other refs in a batch."""
     symbol = (ref.mcx_symbol or ref.underlying_symbol or "").upper()
     if not symbol or not ref.expiry_date:
         return None
@@ -284,7 +205,7 @@ def _resolve_mcx(ref: PendingRef, db: Database) -> Optional[dict]:
     if not row:
         return None
 
-    return _base(ref, row,
+    return _base(ref, row["instrument_id"], row["type"], row["name"],
         primary_exchange_code="MCX",
         mcx_symbol=row["mcx_symbol"],
         mcx_contract_type=row["mcx_contract_type"],
@@ -303,7 +224,7 @@ def _resolve_mcx(ref: PendingRef, db: Database) -> Optional[dict]:
 @router.get("/types")
 def get_instrument_types(db: Database = Depends(get_db)):
     """Return all instrument types (server-mastered reference data)."""
-    stmt = select(instrument_types).order_by(instrument_types.c.instrument_type_id)
+    stmt = select(instrument_types).order_by(instrument_types.c.id)
     return {"instrument_types": db.fetch_all(stmt)}
 
 
@@ -328,57 +249,14 @@ def get_instrument_updates(
     db: Database = Depends(get_db),
 ):
     """
-    Return instrument metadata for delta sync.
-
-    Returns instruments (optionally filtered by ids) updated since `since`.
-    Includes key extension fields for equity/mf/mcx/index.
+    Not migrated this round. This is a genuinely cross-table operation
+    (LEFT JOIN across every detail table) that belongs in a future dao.updates
+    module (arthdesk-instruments), not an improvised rewrite here that would
+    get thrown away once that module exists. Failing clearly rather than
+    letting it hit the old schema and raise an opaque SQL error.
     """
-    params: dict = {}
-
-    id_filter = ""
-    if instrument_ids:
-        placeholders = ",".join(f":id_{i}" for i in range(len(instrument_ids)))
-        params.update({f"id_{i}": iid for i, iid in enumerate(instrument_ids)})
-        id_filter = f"WHERE i.instrument_id IN ({placeholders})"
-
-    since_filter = ""
-    if since:
-        params["since"] = since
-        clause = "AND" if id_filter else "WHERE"
-        since_filter = f"{clause} i.updated_at > :since"
-
-    rows = db.execute(
-        text(f"""
-            SELECT
-                i.instrument_id,
-                i.instrument_type_id,
-                it.name AS instrument_type_name,
-                i.name,
-                i.updated_at,
-                ie.isin,
-                ie.nse_symbol,
-                ie.bse_code,
-                ie.sector,
-                ie.industry,
-                ii.symbol AS index_symbol,
-                ii.exchange AS index_exchange,
-                imf.amfi_code,
-                imcx.mcx_symbol
-            FROM instruments i
-            JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-            LEFT JOIN instrument_equity ie ON ie.instrument_id = i.instrument_id
-            LEFT JOIN instrument_index ii ON ii.instrument_id = i.instrument_id
-            LEFT JOIN instrument_mf imf ON imf.instrument_id = i.instrument_id
-            LEFT JOIN instrument_mcx imcx ON imcx.instrument_id = i.instrument_id
-            {id_filter}
-            {since_filter}
-            ORDER BY i.updated_at
-        """),
-        params,
-    ).mappings().all()
-
-    synced_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-    return {"updates": [dict(r) for r in rows], "synced_at": synced_at}
+    raise HTTPException(status_code=501, detail="Instrument delta sync is temporarily unavailable "
+                                                  "pending the shared instruments package's updates module.")
 
 
 @router.post("/resolve", dependencies=[Depends(require_active_subscription)])
@@ -391,29 +269,35 @@ def resolve_instruments(
 
     Each ref carries a pending_id (local staging row ID) and type-specific
     lookup fields. Resolution priority per type:
-      EQUITY           → isin → nse_symbol → bse_code
-      INDEX            → (symbol, exchange) → symbol alone
-      MF variants      → amfi_code → isin
-      FUTURES/OPTIONS  → nse_fininstrmid → (underlying_symbol, expiry, strike)
-      COMMODITY_*      → (mcx_symbol, expiry_date)
+      EQUITY           → isin → nse_id → bse_id → nse_sym → bse_sym (via dao.equity)
+      INDEX            → sym (via dao.index)
+      MF variants      → amfi_code → isin (not migrated — old schema, may fail)
+      FUTURES/OPTIONS  → exchange+id → underlying+expiry+strike+type (via dao.derivatives)
+      COMMODITY_*      → (mcx_symbol, expiry_date) (not migrated — old schema, may fail)
 
     Returns only resolved items; unresolved are omitted — the client retries
-    on the next sync cycle.
+    on the next sync cycle. A failure resolving one ref (e.g. an MF/MCX ref
+    hitting the not-yet-migrated schema) is caught and logged rather than
+    failing the whole batch.
     """
     resolved = []
     for ref in refs:
         itype = ref.instrument_type.upper()
-        if itype == "EQUITY":
-            result = _resolve_equity(ref, db)
-        elif itype == "INDEX":
-            result = _resolve_index(ref, db)
-        elif itype in MF_TYPES:
-            result = _resolve_mf(ref, db)
-        elif itype in FO_TYPES:
-            result = _resolve_fo(ref, db)
-        elif itype in MCX_TYPES:
-            result = _resolve_mcx(ref, db)
-        else:
+        try:
+            if itype == "EQUITY":
+                result = _resolve_equity_via_dao(ref, db)
+            elif itype == "INDEX":
+                result = _resolve_index_via_dao(ref, db)
+            elif itype in MF_TYPES:
+                result = _resolve_mf(ref, db)
+            elif itype in FO_TYPES:
+                result = _resolve_fo_via_dao(ref, db)
+            elif itype in MCX_TYPES:
+                result = _resolve_mcx(ref, db)
+            else:
+                result = None
+        except Exception:
+            logger.exception("Failed to resolve pending_id=%s instrument_type=%s", ref.pending_id, itype)
             result = None
         if result:
             resolved.append(result)
@@ -436,93 +320,66 @@ def search_instruments(
     """
     Search instruments by ISIN, symbol, name, or AMFI code.
 
-    Response fields (all results):
-        instrument_id, name, type_code, asset_class,
-        isin, nse_symbol, bse_code,    -- equity fields (None for MF)
-        amfi_code, fund_house          -- MF fields (None for equity)
-
     asset_class values (both query param and response) match asset_classes.code
     exactly — the same codes arthdesk-py's backend/enums.py::AssetClass uses.
     """
-    q_upper = q.upper()
-    q_like  = f"%{q}%"
     _ac = (asset_class or "").upper()
-
     results = []
 
-    # ── EQUITY branch ──────────────────────────────────────────────────────────
+    # ── EQUITY branch (migrated) ─────────────────────────────────────────────
     if not _ac or _ac == "EQUITY":
-        rows = db.execute(
-            text("""
-                SELECT
-                    i.instrument_id,
-                    i.name,
-                    it.name        AS type_code,
-                    it.asset_class AS asset_class,
-                    ie.isin,
-                    ie.nse_symbol,
-                    ie.bse_code,
-                    NULL           AS amfi_code,
-                    NULL           AS fund_house
-                FROM instruments i
-                JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-                JOIN instrument_equity ie ON ie.instrument_id = i.instrument_id
-                WHERE it.asset_class = 'EQUITY'
-                  AND i.is_active = 1
-                  AND (
-                      ie.isin = :q
-                      OR i.name LIKE :q_like
-                      OR UPPER(ie.nse_symbol) LIKE :q_like
-                      OR ie.bse_code = :q
-                  )
-                ORDER BY
-                    CASE WHEN ie.isin = :q THEN 0
-                         WHEN UPPER(ie.nse_symbol) = :q THEN 1
-                         ELSE 2
-                    END,
-                    i.name
-                LIMIT 20
-            """),
-            {"q": q_upper, "q_like": q_like},
-        ).mappings().all()
-        results.extend(dict(r) for r in rows)
+        for row in dao.equity.search(db, q):
+            results.append({
+                "instrument_id": row["instr_id"],
+                "name": row.get("nse_name") or row.get("bse_name"),
+                "type_code": "EQUITY",
+                "asset_class": "EQUITY",
+                "isin": row["isin"],
+                "nse_symbol": row["nse_sym"],
+                "bse_code": row["bse_id"],
+                "amfi_code": None,
+                "fund_house": None,
+            })
 
-    # ── MUTUAL FUND branch ────────────────────────────────────────────────────
+    # ── MUTUAL FUND branch (not migrated — old schema, may fail) ─────────────
     if not _ac or _ac == "MUTUAL_FUND":
-        rows = db.execute(
-            text("""
-                SELECT
-                    i.instrument_id,
-                    i.name,
-                    it.name        AS type_code,
-                    it.asset_class AS asset_class,
-                    imf.isin,
-                    NULL           AS nse_symbol,
-                    NULL           AS bse_code,
-                    imf.amfi_code,
-                    imf.fund_house
-                FROM instruments i
-                JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-                JOIN instrument_mf imf ON imf.instrument_id = i.instrument_id
-                WHERE it.asset_class = 'MUTUAL_FUND'
-                  AND i.is_active = 1
-                  AND (
-                      imf.isin = :q
-                      OR imf.amfi_code = :q
-                      OR i.name LIKE :q_like
-                      OR imf.fund_house LIKE :q_like
-                  )
-                ORDER BY
-                    CASE WHEN imf.isin = :q THEN 0
-                         WHEN imf.amfi_code = :q THEN 1
-                         ELSE 2
-                    END,
-                    i.name
-                LIMIT 20
-            """),
-            {"q": q_upper, "q_like": q_like},
-        ).mappings().all()
-        results.extend(dict(r) for r in rows)
+        try:
+            rows = db.execute(
+                text("""
+                    SELECT
+                        i.instrument_id,
+                        i.name,
+                        it.name        AS type_code,
+                        it.asset_class AS asset_class,
+                        imf.isin,
+                        NULL           AS nse_symbol,
+                        NULL           AS bse_code,
+                        imf.amfi_code,
+                        imf.fund_house
+                    FROM instruments i
+                    JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
+                    JOIN instrument_mf imf ON imf.instrument_id = i.instrument_id
+                    WHERE it.asset_class = 'MUTUAL_FUND'
+                      AND i.is_active = 1
+                      AND (
+                          imf.isin = :q
+                          OR imf.amfi_code = :q
+                          OR i.name LIKE :q_like
+                          OR imf.fund_house LIKE :q_like
+                      )
+                    ORDER BY
+                        CASE WHEN imf.isin = :q THEN 0
+                             WHEN imf.amfi_code = :q THEN 1
+                             ELSE 2
+                        END,
+                        i.name
+                    LIMIT 20
+                """),
+                {"q": q.upper(), "q_like": f"%{q}%"},
+            ).mappings().all()
+            results.extend(dict(r) for r in rows)
+        except Exception:
+            logger.exception("MF search failed (not migrated to arthdesk_instruments yet)")
 
     return {"results": results}
 
@@ -540,112 +397,43 @@ def create_equity_instrument(req: CreateEquityRequest, db: Database = Depends(ge
     Returns the instrument_id whether the instrument was newly created or
     already existed (idempotent on isin / nse_symbol / bse_code).
     """
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-
-    # Normalise identifiers
     isin       = req.isin.upper().strip()       if req.isin       else None
     nse_symbol = req.nse_symbol.upper().strip() if req.nse_symbol else None
     bse_code   = req.bse_code.strip()           if req.bse_code   else None
 
-    # Check if already exists
-    existing = db.execute(text("""
-        SELECT i.instrument_id, i.name,
-               ie.isin, ie.nse_symbol, ie.nse_fininstrmid, ie.bse_code,
-               ie.face_value_paise, ie.sector, ie.industry
-        FROM instruments i
-        JOIN instrument_equity ie ON ie.instrument_id = i.instrument_id
-        WHERE (:isin IS NOT NULL AND ie.isin = :isin)
-           OR (:nse  IS NOT NULL AND UPPER(ie.nse_symbol) = :nse)
-           OR (:bse  IS NOT NULL AND ie.bse_code = :bse)
-        LIMIT 1
-    """), {"isin": isin, "nse": nse_symbol, "bse": bse_code}).mappings().first()
-
-    if existing:
-        return {
-            "instrument_id":   existing["instrument_id"],
-            "created":         False,
-            "name":            existing["name"],
-            "isin":            existing["isin"],
-            "nse_symbol":      existing["nse_symbol"],
-            "nse_fininstrmid": existing["nse_fininstrmid"],
-            "bse_code":        existing["bse_code"],
-            "face_value_paise": existing["face_value_paise"],
-            "sector":          existing["sector"],
-            "industry":        existing["industry"],
-        }
-
-    # Look up the EQUITY instrument_type_id
-    type_row = db.execute(text("""
-        SELECT instrument_type_id FROM instrument_types WHERE name = 'EQUITY' LIMIT 1
-    """)).mappings().first()
-    if not type_row:
-        raise HTTPException(status_code=500, detail="EQUITY instrument type not configured on server")
-
-    nse_exchange_row = db.execute(text("""
-        SELECT exchange_id FROM exchanges WHERE code = 'NSE' LIMIT 1
-    """)).mappings().first()
-    primary_exchange_id = nse_exchange_row["exchange_id"] if nse_exchange_row else None
-
-    from app.database import engine
-    with engine.begin() as conn:
-        result = conn.execute(text("""
-            INSERT INTO instruments (name, instrument_type_id, primary_exchange_id,
-                                     is_active, source, created_at, updated_at)
-            VALUES (:name, :type_id, :exch_id, 1, 'MANUAL', :now, :now)
-        """), {
-            "name":    req.name.strip(),
-            "type_id": type_row["instrument_type_id"],
-            "exch_id": primary_exchange_id,
-            "now":     now,
-        })
-        instrument_id = result.lastrowid
-
-        conn.execute(text("""
-            INSERT INTO instrument_equity
-                (instrument_id, isin, nse_symbol, nse_fininstrmid, bse_code,
-                 face_value_paise, sector, industry)
-            VALUES (:iid, :isin, :nse, :nse_fin, :bse, :fv, :sector, :industry)
-        """), {
-            "iid":     instrument_id,
-            "isin":    isin,
-            "nse":     nse_symbol,
-            "nse_fin": req.nse_fininstrmid,
-            "bse":     bse_code,
-            "fv":      req.face_value_paise,
-            "sector":  req.sector,
-            "industry": req.industry,
-        })
+    result = dao.equity.create(
+        db, isin=isin, nse_sym=nse_symbol, nse_id=req.nse_fininstrmid,
+        nse_name=req.name.strip(), bse_sym=bse_code,
+        face_value=req.face_value_paise / 100 if req.face_value_paise is not None else None,
+    )
+    db.commit()
 
     return {
-        "instrument_id":  instrument_id,
-        "created":        True,
-        "name":           req.name.strip(),
-        "isin":           isin,
-        "nse_symbol":     nse_symbol,
-        "nse_fininstrmid": req.nse_fininstrmid,
-        "bse_code":       bse_code,
-        "face_value_paise": req.face_value_paise,
-        "sector":         req.sector,
-        "industry":       req.industry,
+        "instrument_id":    result["instr_id"],
+        "created":          result["created"],
+        "name":             result.get("nse_name") or req.name.strip(),
+        "isin":             result["isin"],
+        "nse_symbol":       result["nse_sym"],
+        "nse_fininstrmid":  result["nse_id"],
+        "bse_code":         result["bse_id"],
+        "face_value_paise": int(round(result["face_value"] * 100)) if result.get("face_value") is not None else None,
+        "sector":           None,   # dropped from the schema in Phase 2 — no longer tracked
+        "industry":         None,
     }
 
 
 @router.get("/{isin}")
 def get_instrument(isin: str, db: Database = Depends(get_db)):
     """Get instrument details by ISIN."""
-    row = db.execute(
-        text("""
-            SELECT i.instrument_id, i.name, it.name AS asset_class,
-                   ie.isin, ie.nse_symbol, ie.bse_code
-            FROM instruments i
-            JOIN instrument_types it ON it.instrument_type_id = i.instrument_type_id
-            JOIN instrument_equity ie ON ie.instrument_id = i.instrument_id
-            WHERE ie.isin = :isin
-        """),
-        {"isin": isin.upper()},
-    ).mappings().first()
-
+    row = dao.equity.resolve(db, isin=isin.upper())
     if not row:
         raise HTTPException(status_code=404, detail="Instrument not found")
 
-    return dict(row)
+    return {
+        "instrument_id": row["instr_id"],
+        "name":          row.get("nse_name") or row.get("bse_name"),
+        "asset_class":   "EQUITY",
+        "isin":          row["isin"],
+        "nse_symbol":    row["nse_sym"],
+        "bse_code":      row["bse_id"],
+    }

@@ -1,10 +1,13 @@
 """
 BSE F&O bhavcopy parser.
 
-Lookup:  FinInstrmId -> instrument_fo.bse_fininstrmid -> instrument_id
-On miss: link to existing NSE contract if same contract exists,
-         otherwise bulk-create all missing contracts in ONE transaction.
+Lookup:  FinInstrmId -> instrument_derivatives.nse_bse_id (exchange='BSE') -> instr_id
+On miss: bulk-create all missing contracts.
 Writes:  fo_eod (exchange='BSE')
+
+No cross-exchange contract matching (removed) — NSE and BSE F&O contracts
+are separate rows by design (exchange discriminator), so a BSE sync never
+links to a row NSE's sync created, and vice versa.
 """
 from __future__ import annotations
 
@@ -17,9 +20,8 @@ from sqlalchemy import text
 from app.database import engine
 from app.cron.bhavcopy.sync.base import (
     get_pending_files, load_file_df, mark_synced, mark_failed,
-    to_paise, to_int, to_float,
+    to_int, to_float,
     bulk_resolve_fo_bse, bulk_create_fo,
-    get_fo_instrument_by_contract,
     get_underlying_instrument_id, get_or_create_index,
 )
 
@@ -85,10 +87,9 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
 
     missing_ids = [fid for fid in unique_fin_ids if fid not in id_map]
     if missing_ids:
-        linked, new_specs = _resolve_missing(missing_ids, parsed_rows)
-        id_map.update(linked)
+        new_specs = _build_new_specs(missing_ids, parsed_rows)
         if new_specs:
-            new_ids = bulk_create_fo(new_specs, "bse_fininstrmid")
+            new_ids = bulk_create_fo(new_specs, "BSE")
             id_map.update(new_ids)
 
     batch = []
@@ -100,49 +101,49 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
 
         trade_date = str(row.get("TradDt", trade_date_str)).strip()[:10]
         batch.append({
-            "instrument_id":          inst_id,
-            "exchange":               EXCHANGE,
-            "trade_date":             trade_date,
-            "open_price_paise":       to_paise(row.get("OpnPric")),
-            "high_price_paise":       to_paise(row.get("HghPric")),
-            "low_price_paise":        to_paise(row.get("LwPric")),
-            "close_price_paise":      to_paise(row.get("ClsPric")),
-            "last_price_paise":       to_paise(row.get("LastPric")),
-            "prev_close_paise":       to_paise(row.get("PrvsClsgPric")),
-            "underlying_price_paise": to_paise(row.get("UndrlygPric")),
-            "settlement_price_paise": to_paise(row.get("SttlmPric")),
-            "open_interest":          to_int(row.get("OpnIntrst")),
-            "oi_change":              to_int(row.get("ChngInOpnIntrst")),
-            "volume":                 to_int(row.get("TtlTradgVol")),
-            "traded_value_rupees":    to_float(row.get("TtlTrfVal")),
-            "num_trades":             to_int(row.get("TtlNbOfTxsExctd")),
+            "instr_id":          inst_id,
+            "exchange":          EXCHANGE,
+            "trade_date":        trade_date,
+            "open_price":        to_float(row.get("OpnPric")),
+            "high_price":        to_float(row.get("HghPric")),
+            "low_price":         to_float(row.get("LwPric")),
+            "close_price":       to_float(row.get("ClsPric")),
+            "last_price":        to_float(row.get("LastPric")),
+            "prev_close_price":  to_float(row.get("PrvsClsgPric")),
+            "underlying_price":  to_float(row.get("UndrlygPric")),
+            "settlement_price":  to_float(row.get("SttlmPric")),
+            "open_interest":     to_int(row.get("OpnIntrst")),
+            "oi_change":         to_int(row.get("ChngInOpnIntrst")),
+            "volume":            to_int(row.get("TtlTradgVol")),
+            "traded_value_rupees": to_float(row.get("TtlTrfVal")),
+            "num_trades":        to_int(row.get("TtlNbOfTxsExctd")),
         })
 
     if batch:
         with engine.begin() as conn:
             conn.execute(text("""
                 INSERT INTO fo_eod (
-                    instrument_id, exchange, trade_date,
-                    open_price_paise, high_price_paise, low_price_paise,
-                    close_price_paise, last_price_paise, prev_close_paise,
-                    underlying_price_paise, settlement_price_paise,
+                    instr_id, exchange, trade_date,
+                    open_price, high_price, low_price,
+                    close_price, last_price, prev_close_price,
+                    underlying_price, settlement_price,
                     open_interest, oi_change, volume, traded_value_rupees, num_trades
                 ) VALUES (
-                    :instrument_id, :exchange, :trade_date,
-                    :open_price_paise, :high_price_paise, :low_price_paise,
-                    :close_price_paise, :last_price_paise, :prev_close_paise,
-                    :underlying_price_paise, :settlement_price_paise,
+                    :instr_id, :exchange, :trade_date,
+                    :open_price, :high_price, :low_price,
+                    :close_price, :last_price, :prev_close_price,
+                    :underlying_price, :settlement_price,
                     :open_interest, :oi_change, :volume, :traded_value_rupees, :num_trades
                 )
-                ON CONFLICT(instrument_id, exchange, trade_date) DO UPDATE SET
-                    open_price_paise=excluded.open_price_paise,
-                    high_price_paise=excluded.high_price_paise,
-                    low_price_paise=excluded.low_price_paise,
-                    close_price_paise=excluded.close_price_paise,
-                    last_price_paise=excluded.last_price_paise,
-                    prev_close_paise=excluded.prev_close_paise,
-                    underlying_price_paise=excluded.underlying_price_paise,
-                    settlement_price_paise=excluded.settlement_price_paise,
+                ON CONFLICT(instr_id, exchange, trade_date) DO UPDATE SET
+                    open_price=excluded.open_price,
+                    high_price=excluded.high_price,
+                    low_price=excluded.low_price,
+                    close_price=excluded.close_price,
+                    last_price=excluded.last_price,
+                    prev_close_price=excluded.prev_close_price,
+                    underlying_price=excluded.underlying_price,
+                    settlement_price=excluded.settlement_price,
                     open_interest=excluded.open_interest,
                     oi_change=excluded.oi_change,
                     volume=excluded.volume,
@@ -156,17 +157,13 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
     return len(batch)
 
 
-def _resolve_missing(
-    missing_ids: list[int],
-    parsed_rows: list,
-) -> tuple[dict[int, int], list[dict]]:
+def _build_new_specs(missing_ids: list[int], parsed_rows: list) -> list[dict]:
     fid_to_row: dict[int, object] = {}
     for fid, row in parsed_rows:
         if fid in missing_ids and fid not in fid_to_row:
             fid_to_row[fid] = row
 
-    linked:    dict[int, int] = {}
-    new_specs: list[dict]     = []
+    new_specs: list[dict] = []
 
     for fid, row in fid_to_row.items():
         symbol     = str(row.get("TckrSymb", "")).strip()
@@ -190,18 +187,7 @@ def _resolve_missing(
 
         underlying_id = get_underlying_instrument_id(symbol)
         if underlying_id is None:
-            underlying_id = get_or_create_index(symbol, "NSE")
-
-        existing_id = get_fo_instrument_by_contract(
-            underlying_id, expiry_date, strike_paise, option_type
-        )
-        if existing_id:
-            with engine.begin() as conn:
-                conn.execute(text("""
-                    UPDATE instrument_derivatives SET bse_fininstrmid=:fid WHERE instrument_id=:iid
-                """), {"fid": fid, "iid": existing_id})
-            linked[fid] = existing_id
-            continue
+            underlying_id = get_or_create_index(symbol, "BSE")
 
         inst_kind = _TYPE_MAP.get(instr_type, "FUTURES")
         name = (f"{symbol} {expiry_date} {strike_raw} {option_type}"
@@ -221,7 +207,7 @@ def _resolve_missing(
             "lot_size":      lot_size,
         })
 
-    return linked, new_specs
+    return new_specs
 
 
 def _stats(synced, failed, rows, errors):

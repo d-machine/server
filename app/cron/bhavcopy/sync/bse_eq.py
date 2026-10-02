@@ -6,8 +6,9 @@ Bulk-resolves instrument_id by ISIN; auto-creates missing instruments.
 Writes to equity_eod (exchange='BSE') and latest_prices.
 
 BSE bhavcopy columns used for instrument master:
-  ISIN, TckrSymb (nse_symbol fallback), FinInstrmNm (name),
-  FinInstrmId (bse_code -- BSE scrip code)
+  ISIN, TckrSymb (BSE's own ticker -> bse_sym), FinInstrmNm (name),
+  FinInstrmId (BSE's own numeric scrip code -> bse_id, parallel to NSE's
+  nse_id — confirmed same FinInstrmId/ISIN/TckrSymb header shape as NSE).
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from sqlalchemy import text
 from app.database import engine
 from app.cron.bhavcopy.sync.base import (
     get_pending_files, load_file_df, mark_synced, mark_failed,
-    to_paise, to_int, to_float,
+    to_int, to_float,
     bulk_resolve_equity, bulk_create_equity, bulk_update_equity_fields,
     batch_upsert_latest_prices,
 )
@@ -67,14 +68,14 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
         isin = str(row.get("ISIN", "")).strip()
         if not isin or isin == "nan":
             continue
-        c = to_paise(row.get("ClsPric"))
+        c = to_float(row.get("ClsPric"))
         if c is None:
             continue
-        bse_code = str(row.get("FinInstrmId", "")).strip() or None
-        name     = str(row.get("FinInstrmNm", bse_code or isin)).strip() or isin
-        symbol   = str(row.get("TckrSymb", "")).strip() or None
+        bse_id   = to_int(row.get("FinInstrmId"))
+        bse_sym  = str(row.get("TckrSymb", "")).strip() or None
+        name     = str(row.get("FinInstrmNm", bse_sym or isin)).strip() or isin
         if isin not in isin_meta:
-            isin_meta[isin] = {"name": name, "bse_code": bse_code, "nse_symbol": symbol}
+            isin_meta[isin] = {"name": name, "bse_id": bse_id, "bse_sym": bse_sym}
         valid_rows.append(row)
 
     if not valid_rows:
@@ -100,10 +101,10 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
         inst_id = id_map.get(isin)
         if inst_id and isin not in new_isins:
             upd = {"instrument_id": inst_id}
-            if meta.get("bse_code"):
-                upd["bse_code"] = meta["bse_code"]
-            if meta.get("nse_symbol"):
-                upd["nse_symbol"] = meta["nse_symbol"]
+            if meta.get("bse_id") is not None:
+                upd["bse_id"] = meta["bse_id"]
+            if meta.get("bse_sym"):
+                upd["bse_code"] = meta["bse_sym"]  # bulk_update_equity_fields' legacy key name
             if len(upd) > 1:
                 updates.append(upd)
     if updates:
@@ -122,38 +123,38 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
             continue
 
         trade_date = str(row.get("TradDt", trade_date_str)).strip()[:10]
-        o = to_paise(row.get("OpnPric"))
-        h = to_paise(row.get("HghPric"))
-        l = to_paise(row.get("LwPric"))
-        c = to_paise(row.get("ClsPric"))
+        o = to_float(row.get("OpnPric"))
+        h = to_float(row.get("HghPric"))
+        l = to_float(row.get("LwPric"))
+        c = to_float(row.get("ClsPric"))
         if c is None:
             skipped += 1
             continue
 
         eod_batch.append({
-            "instrument_id":          inst_id,
-            "exchange":               EXCHANGE,
-            "trade_date":             trade_date,
-            "series":                 str(row.get("SctySrs", "")).strip() or None,
-            "open_price_paise":       o,
-            "high_price_paise":       h,
-            "low_price_paise":        l,
-            "close_price_paise":      c,
-            "last_price_paise":       to_paise(row.get("LastPric")),
-            "prev_close_paise":       to_paise(row.get("PrvsClsgPric")),
-            "settlement_price_paise": to_paise(row.get("SttlmPric")),
-            "volume":                 to_int(row.get("TtlTradgVol")),
-            "traded_value_rupees":    to_float(row.get("TtlTrfVal")),
-            "num_trades":             to_int(row.get("TtlNbOfTxsExctd")),
+            "instr_id":            inst_id,
+            "exchange":            EXCHANGE,
+            "trade_date":          trade_date,
+            "series":              str(row.get("SctySrs", "")).strip() or None,
+            "open_price":          o,
+            "high_price":          h,
+            "low_price":           l,
+            "close_price":         c,
+            "last_price":          to_float(row.get("LastPric")),
+            "prev_close_price":    to_float(row.get("PrvsClsgPric")),
+            "settlement_price":    to_float(row.get("SttlmPric")),
+            "volume":              to_int(row.get("TtlTradgVol")),
+            "traded_value_rupees": to_float(row.get("TtlTrfVal")),
+            "num_trades":          to_int(row.get("TtlNbOfTxsExctd")),
         })
         latest_batch.append({
             "instrument_id":     inst_id,
             "exchange":          EXCHANGE,
             "price_date":        trade_date,
-            "open_price_paise":  o,
-            "high_price_paise":  h,
-            "low_price_paise":   l,
-            "close_price_paise": c,
+            "open_price_paise":  int(round(o * 100)) if o is not None else None,
+            "high_price_paise":  int(round(h * 100)) if h is not None else None,
+            "low_price_paise":   int(round(l * 100)) if l is not None else None,
+            "close_price_paise": int(round(c * 100)),
         })
 
     # -- Pass 6: batch upserts ---------------------------------------------------
@@ -161,31 +162,36 @@ def _process_file(file_name: str, trade_date_str: str) -> int:
         with engine.begin() as conn:
             conn.execute(text("""
                 INSERT INTO equity_eod (
-                    instrument_id, exchange, trade_date, series,
-                    open_price_paise, high_price_paise, low_price_paise,
-                    close_price_paise, last_price_paise, prev_close_paise,
-                    settlement_price_paise, volume, traded_value_rupees, num_trades
+                    instr_id, exchange, trade_date, series,
+                    open_price, high_price, low_price,
+                    close_price, last_price, prev_close_price,
+                    settlement_price, volume, traded_value_rupees, num_trades
                 ) VALUES (
-                    :instrument_id, :exchange, :trade_date, :series,
-                    :open_price_paise, :high_price_paise, :low_price_paise,
-                    :close_price_paise, :last_price_paise, :prev_close_paise,
-                    :settlement_price_paise, :volume, :traded_value_rupees, :num_trades
+                    :instr_id, :exchange, :trade_date, :series,
+                    :open_price, :high_price, :low_price,
+                    :close_price, :last_price, :prev_close_price,
+                    :settlement_price, :volume, :traded_value_rupees, :num_trades
                 )
-                ON CONFLICT(instrument_id, exchange, trade_date) DO UPDATE SET
+                ON CONFLICT(instr_id, exchange, trade_date) DO UPDATE SET
                     series=excluded.series,
-                    open_price_paise=excluded.open_price_paise,
-                    high_price_paise=excluded.high_price_paise,
-                    low_price_paise=excluded.low_price_paise,
-                    close_price_paise=excluded.close_price_paise,
-                    last_price_paise=excluded.last_price_paise,
-                    prev_close_paise=excluded.prev_close_paise,
-                    settlement_price_paise=excluded.settlement_price_paise,
+                    open_price=excluded.open_price,
+                    high_price=excluded.high_price,
+                    low_price=excluded.low_price,
+                    close_price=excluded.close_price,
+                    last_price=excluded.last_price,
+                    prev_close_price=excluded.prev_close_price,
+                    settlement_price=excluded.settlement_price,
                     volume=excluded.volume,
                     traded_value_rupees=excluded.traded_value_rupees,
                     num_trades=excluded.num_trades
             """), eod_batch)
 
-    batch_upsert_latest_prices(latest_batch)
+    # latest_prices is deferred (dao.prices not built yet) — don't let its
+    # now-broken schema block the in-scope equity_eod write above.
+    try:
+        batch_upsert_latest_prices(latest_batch)
+    except Exception:
+        logger.exception("[%s] latest_prices upsert failed (deferred, not migrated yet)", SOURCE)
 
     if skipped:
         logger.debug("[%s] %s -- skipped %d rows (missing ISIN or close price)", SOURCE, file_name, skipped)

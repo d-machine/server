@@ -10,6 +10,7 @@ from typing import Optional
 import pandas as pd
 from sqlalchemy import text
 
+from arthdesk_instruments import dao
 from app.database import engine
 from app.cron.bhavcopy.common import (
     gcs_blob_name, download_df_from_gcs, download_bytes_from_gcs,
@@ -123,152 +124,114 @@ def to_float(val) -> Optional[float]:
 
 
 # -- Bulk instrument resolve helpers ------------------------------------------
+# Equity/derivatives/index below delegate to arthdesk_instruments.dao — same
+# function names/signatures as before so nse_eq.py/bse_eq.py/nse_fo.py/
+# bse_fo.py barely change; all old-shape-to-new-shape translation happens
+# here. mf/mcx/prices helpers further down are untouched/deferred.
 
 def bulk_resolve_equity(isins: list[str]) -> dict[str, int]:
-    """ONE SELECT: isin -> instrument_id for all ISINs in the list."""
+    """isin -> instrument_id for all ISINs in the list."""
     if not isins:
         return {}
-    ph = ",".join(f":i{n}" for n in range(len(isins)))
     with engine.connect() as conn:
-        rows = conn.execute(
-            text(f"SELECT isin, instrument_id FROM instrument_equity WHERE isin IN ({ph})"),
-            {f"i{n}": v for n, v in enumerate(isins)},
-        ).fetchall()
-    return {r[0]: r[1] for r in rows}
+        return dao.equity.bulk_resolve(conn, isins)
 
 
 def bulk_create_equity(missing: list[dict]) -> dict[str, int]:
     """
     Bulk-create instruments for ISINs not yet in the master.
-    Each item in missing: {isin, name, nse_symbol, bse_code, face_value_paise}
-    Returns {isin: instrument_id}.
+    Each item in missing: {isin, name?, nse_symbol?, nse_id?, bse_code?,
+    bse_id?, face_value?} — face_value is REAL rupees (both nse_eq.py and
+    bse_eq.py compute this directly via to_float now, no more paise
+    round-trip). 'nse_symbol'/'bse_code' are the legacy key names; 'nse_id'/
+    'bse_id'/'bse_sym' are accepted directly too. Returns {isin: instrument_id}.
     """
     if not missing:
         return {}
-    result = {}
-    type_id = _get_type_id("EQUITY")
+    rows = []
+    for item in missing:
+        rows.append({
+            "isin": item["isin"],
+            "nse_name": item.get("name"),
+            "nse_sym": item.get("nse_symbol"),
+            "nse_id": item.get("nse_id"),
+            "bse_sym": item.get("bse_sym", item.get("bse_code")),
+            "bse_id": item.get("bse_id"),
+            "face_value": item.get("face_value"),
+        })
     with engine.begin() as conn:
-        for item in missing:
-            r = conn.execute(text("""
-                INSERT INTO instruments (name, instrument_type_id, is_active, created_at, updated_at)
-                VALUES (:name, :type_id, 1, datetime('now'), datetime('now'))
-            """), {"name": item["name"], "type_id": type_id})
-            instrument_id = r.lastrowid
-            conn.execute(text("""
-                INSERT INTO instrument_equity
-                    (instrument_id, isin, nse_symbol, bse_code, face_value_paise)
-                VALUES (:iid, :isin, :nse_symbol, :bse_code, :fv)
-                ON CONFLICT(instrument_id) DO UPDATE SET
-                    nse_symbol       = COALESCE(excluded.nse_symbol, nse_symbol),
-                    bse_code         = COALESCE(excluded.bse_code, bse_code),
-                    face_value_paise = COALESCE(excluded.face_value_paise, face_value_paise)
-            """), {
-                "iid":        instrument_id,
-                "isin":       item["isin"],
-                "nse_symbol": item.get("nse_symbol"),
-                "bse_code":   item.get("bse_code"),
-                "fv":         item.get("face_value_paise"),
-            })
-            result[item["isin"]] = instrument_id
-            logger.info("[base] Created EQUITY %d: %s (%s)", instrument_id, item["name"], item["isin"])
+        result = dao.equity.bulk_create(conn, rows)
+    for isin, instrument_id in result.items():
+        logger.info("[base] Created EQUITY %d: %s", instrument_id, isin)
     return result
 
 
 def bulk_update_equity_fields(updates: list[dict]):
     """
     Update metadata for existing equity instruments from bhavcopy.
-    Each item: {instrument_id, name?, nse_symbol?, bse_code?, face_value_paise?}
-
-    Updates instruments.name conditionally (WHERE name != new_name) to avoid
-    spurious updated_at trigger bumps when nothing changed.
-    Extension fields are overwritten if provided (not COALESCE) so bhavcopy
-    corrections propagate.
+    Each item: {instrument_id, name?, nse_symbol?, nse_id?, bse_code?,
+    bse_id?, face_value?} — face_value is REAL rupees. 'name' has no home on
+    instrument_equity anymore (nse_name/bse_name instead) — silently dropped
+    if passed, since no current caller actually provides it.
     """
     if not updates:
         return
+    translated = []
+    for item in updates:
+        fields = {"instr_id": item["instrument_id"]}
+        if item.get("nse_symbol") is not None:
+            fields["nse_sym"] = item["nse_symbol"]
+        if item.get("nse_id") is not None:
+            fields["nse_id"] = item["nse_id"]
+        if item.get("bse_code") is not None:
+            fields["bse_sym"] = item["bse_code"]
+        if item.get("bse_id") is not None:
+            fields["bse_id"] = item["bse_id"]
+        if item.get("face_value") is not None:
+            fields["face_value"] = item["face_value"]
+        translated.append(fields)
     with engine.begin() as conn:
-        for item in updates:
-            iid = item["instrument_id"]
-
-            # Update instruments.name only if it actually changed
-            if item.get("name") is not None:
-                conn.execute(text("""
-                    UPDATE instruments SET name = :name, updated_at = datetime('now')
-                    WHERE instrument_id = :iid AND name != :name
-                """), {"name": item["name"], "iid": iid})
-
-            # Update extension fields that are explicitly provided
-            ext_fields = {k: v for k, v in item.items()
-                          if k not in ("instrument_id", "name") and v is not None}
-            if not ext_fields:
-                continue
-            set_clause = ", ".join(f"{k} = :{k}" for k in ext_fields)
-            conn.execute(
-                text(f"UPDATE instrument_equity SET {set_clause} WHERE instrument_id = :iid"),
-                {**ext_fields, "iid": iid}
-            )
+        dao.equity.update_fields(conn, translated)
 
 
 def bulk_resolve_fo_nse(fin_ids: list[int]) -> dict[int, int]:
-    """ONE SELECT: nse_fininstrmid -> instrument_id."""
+    """nse_bse_id -> instrument_id, scoped to NSE."""
     if not fin_ids:
         return {}
-    ph = ",".join(f":i{n}" for n in range(len(fin_ids)))
     with engine.connect() as conn:
-        rows = conn.execute(
-            text(f"SELECT nse_fininstrmid, instrument_id FROM instrument_derivatives WHERE nse_fininstrmid IN ({ph})"),
-            {f"i{n}": v for n, v in enumerate(fin_ids)},
-        ).fetchall()
-    return {r[0]: r[1] for r in rows}
+        return dao.derivatives.bulk_resolve_by_id(conn, "NSE", fin_ids)
 
 
 def bulk_resolve_fo_bse(fin_ids: list[int]) -> dict[int, int]:
-    """ONE SELECT: bse_fininstrmid -> instrument_id."""
+    """nse_bse_id -> instrument_id, scoped to BSE."""
     if not fin_ids:
         return {}
-    ph = ",".join(f":i{n}" for n in range(len(fin_ids)))
     with engine.connect() as conn:
-        rows = conn.execute(
-            text(f"SELECT bse_fininstrmid, instrument_id FROM instrument_derivatives WHERE bse_fininstrmid IN ({ph})"),
-            {f"i{n}": v for n, v in enumerate(fin_ids)},
-        ).fetchall()
-    return {r[0]: r[1] for r in rows}
+        return dao.derivatives.bulk_resolve_by_id(conn, "BSE", fin_ids)
 
 
 def bulk_resolve_underlying_symbols(symbols: list[str]) -> dict[str, int]:
-    """2 SELECTs (equity + index): symbol -> underlying instrument_id."""
+    """symbol -> underlying instrument_id, looping dao.derivatives.resolve_underlying
+    per unique symbol (no bulk primitive for this — deliberate, see Phase 3/4
+    plan: a bounded number of unique underlyings per file, each a cheap local
+    lookup, not worth a dedicated batch primitive)."""
     if not symbols:
         return {}
-    ph = ",".join(f":s{n}" for n in range(len(symbols)))
-    params = {f"s{n}": s for n, s in enumerate(symbols)}
     result: dict[str, int] = {}
     with engine.connect() as conn:
-        for table, col in [("instrument_equity", "nse_symbol"), ("instrument_index", "symbol")]:
-            for r in conn.execute(
-                text(f"SELECT {col}, instrument_id FROM {table} WHERE {col} IN ({ph})"),
-                params,
-            ).fetchall():
-                if r[0] not in result:
-                    result[r[0]] = r[1]
+        for sym in symbols:
+            instr_id = dao.derivatives.resolve_underlying(conn, sym, "NSE")
+            if instr_id is not None:
+                result[sym] = instr_id
     return result
 
 
-def bulk_resolve_fo_contracts_by_underlying(underlying_ids: list[int]) -> dict[tuple, int]:
-    """ONE SELECT: (underlying_id, expiry_date, strike_price_paise, option_type) -> instrument_id."""
-    if not underlying_ids:
-        return {}
-    ph = ",".join(f":u{n}" for n in range(len(underlying_ids)))
-    with engine.connect() as conn:
-        rows = conn.execute(
-            text(f"""
-                SELECT instrument_id, underlying_instrument_id, expiry_date,
-                       strike_price_paise, option_type
-                FROM instrument_derivatives
-                WHERE underlying_instrument_id IN ({ph})
-            """),
-            {f"u{n}": u for n, u in enumerate(underlying_ids)},
-        ).fetchall()
-    return {(r[1], r[2], int(r[3]), r[4]): r[0] for r in rows}
+# bulk_resolve_fo_contracts_by_underlying and get_fo_instrument_by_contract
+# (cross-exchange contract dedup-by-composite-key) are deliberately removed,
+# not migrated — that model only made sense under the old schema, where one
+# row could represent both an NSE and a BSE contract via two separate id
+# columns. The new schema gives each exchange's contract its own row (via
+# the `exchange` discriminator), so there's no cross-exchange row to find.
 
 
 def bulk_resolve_mcx(keys: list[tuple]) -> dict[tuple, int]:
@@ -307,63 +270,25 @@ def bulk_resolve_amfi(codes: list[str]) -> dict[str, int]:
 
 
 # -- Single-item fallback helpers (for on-miss creates) -----------------------
-
-def get_fo_instrument_by_contract(
-    underlying_instrument_id: int,
-    expiry_date: str,
-    strike_price_paise: int,
-    option_type: str,
-) -> Optional[int]:
-    with engine.connect() as conn:
-        row = conn.execute(text("""
-            SELECT instrument_id FROM instrument_derivatives
-            WHERE underlying_instrument_id=:uid
-              AND expiry_date=:exp
-              AND strike_price_paise=:strike
-              AND option_type=:opt
-        """), {"uid": underlying_instrument_id, "exp": expiry_date,
-               "strike": strike_price_paise, "opt": option_type}).first()
-    return row[0] if row else None
-
+# get_fo_instrument_by_contract removed along with its cross-exchange-dedup
+# callers above — see note there.
 
 def get_underlying_instrument_id(symbol: str) -> Optional[int]:
+    """Behavior change, intentional: checks instrument_index before
+    instrument_equity now (today's old code checked equity first) — this is
+    the NIFTY-vs-NIFTYBEES fix (Phase 3's dao.derivatives.resolve_underlying),
+    finally taking effect for BSE's sync path."""
     with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT instrument_id FROM instrument_equity WHERE nse_symbol=:sym"),
-            {"sym": symbol}
-        ).first()
-        if row:
-            return row[0]
-        row = conn.execute(
-            text("SELECT instrument_id FROM instrument_index WHERE symbol=:sym"),
-            {"sym": symbol}
-        ).first()
-        if row:
-            return row[0]
-    return None
+        return dao.derivatives.resolve_underlying(conn, symbol, "BSE")
 
 
 def get_or_create_index(symbol: str, exchange: str = "NSE") -> int:
-    with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT instrument_id FROM instrument_index WHERE symbol=:sym AND exchange=:exc"),
-            {"sym": symbol, "exc": exchange}
-        ).first()
-        if row:
-            return row[0]
-    type_id = _get_type_id("INDEX")
+    """`exchange` accepted for call-site compatibility but ignored —
+    instrument_index has no exchange column (Phase 2: small, curated,
+    hand-seeded table where symbols don't collide across exchanges).
+    Uses engine.begin() (not connect()) since this can write a new row."""
     with engine.begin() as conn:
-        r = conn.execute(text("""
-            INSERT INTO instruments (name, instrument_type_id, is_active, created_at, updated_at)
-            VALUES (:name, :type_id, 1, datetime('now'), datetime('now'))
-        """), {"name": symbol, "type_id": type_id})
-        instrument_id = r.lastrowid
-        conn.execute(text("""
-            INSERT OR IGNORE INTO instrument_index (instrument_id, symbol, exchange)
-            VALUES (:iid, :sym, :exc)
-        """), {"iid": instrument_id, "sym": symbol, "exc": exchange})
-    logger.info("[base] Auto-created INDEX: %s -> id=%d", symbol, instrument_id)
-    return instrument_id
+        return dao.index.get_or_create(conn, symbol)
 
 
 def get_or_create_mf(amfi_code: str, name: str, fund_house: str = None,
@@ -431,48 +356,36 @@ def batch_upsert_latest_prices(rows: list[dict]):
 
 # -- Bulk create helpers -------------------------------------------------------
 
-def bulk_create_fo(missing: list[dict], exchange_col: str) -> dict[int, int]:
+def bulk_create_fo(missing: list[dict], exchange: str) -> dict[int, int]:
     """
-    Bulk-create FO instruments in ONE transaction.
+    Bulk-create FO instruments.
     Each item in missing: {fin_id, name, inst_kind, underlying_id, symbol,
                            instr_type, expiry_date, strike_paise, option_type, lot_size}
-    exchange_col: 'nse_fininstrmid' or 'bse_fininstrmid'
-    Returns {fin_id: instrument_id}.
+    `exchange`: 'NSE' or 'BSE' — callers used to pass the literal old column
+    name ('nse_fininstrmid'/'bse_fininstrmid') here; now it's just the
+    exchange, which is what the concept actually is under the new schema
+    (exchange + nse_bse_id, not two separate id columns).
+    Returns {fin_id: instrument_id}. This is also where the old
+    instrument_type-vs-contract_type column bug is fixed by construction —
+    dao.derivatives.bulk_create only ever writes real Core-defined columns.
     """
     if not missing:
         return {}
-    result = {}
+    rows = [{
+        "nse_bse_id": item["fin_id"],
+        "nse_bse_name": item["name"],
+        "ul_instr_id": item["underlying_id"],
+        "contract_type": item["instr_type"],
+        "expd": item["expiry_date"],
+        "strkp": item["strike_paise"] / 100,
+        "opn_type": item["option_type"],
+        "lot_size": item.get("lot_size"),
+        "instrument_type_name": item["inst_kind"],
+    } for item in missing]
     with engine.begin() as conn:
-        for item in missing:
-            type_id = _get_type_id(item["inst_kind"])
-            r = conn.execute(text("""
-                INSERT INTO instruments (name, instrument_type_id, is_active, created_at, updated_at)
-                VALUES (:name, :type_id, 1, datetime('now'), datetime('now'))
-            """), {"name": item["name"], "type_id": type_id})
-            instrument_id = r.lastrowid
-
-            conn.execute(text(f"""
-                INSERT OR IGNORE INTO instrument_derivatives (
-                    instrument_id, underlying_instrument_id, underlying_symbol,
-                    instrument_type, expiry_date, strike_price_paise, option_type,
-                    lot_size, {exchange_col}
-                ) VALUES (
-                    :iid, :uid, :sym, :itype, :exp, :strike, :opt, :lot, :fin_id
-                )
-            """), {
-                "iid":    instrument_id,
-                "uid":    item["underlying_id"],
-                "sym":    item["symbol"],
-                "itype":  item["instr_type"],
-                "exp":    item["expiry_date"],
-                "strike": item["strike_paise"],
-                "opt":    item["option_type"],
-                "lot":    item.get("lot_size"),
-                "fin_id": item["fin_id"],
-            })
-
-            result[item["fin_id"]] = instrument_id
-            logger.debug("[base] Created FO instrument %d: %s", instrument_id, item["name"])
+        result = dao.derivatives.bulk_create(conn, exchange, rows)
+    for fin_id, instrument_id in result.items():
+        logger.debug("[base] Created FO instrument %d (fin_id=%s)", instrument_id, fin_id)
     return result
 
 

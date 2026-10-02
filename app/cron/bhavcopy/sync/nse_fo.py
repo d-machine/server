@@ -3,8 +3,8 @@ NSE F&O bhavcopy parser.
 
 Reads downloaded BhavCopy_NSE_FO_*_F_0000.csv files.
 
-Lookup:  FinInstrmId -> instrument_fo.nse_fininstrmid -> instrument_id
-On miss: bulk-create all missing contracts in ONE transaction.
+Lookup:  FinInstrmId -> instrument_derivatives.nse_bse_id (exchange='NSE') -> instr_id
+On miss: bulk-create all missing contracts.
 Writes:  fo_eod (exchange='NSE')
 """
 from __future__ import annotations
@@ -18,9 +18,9 @@ from sqlalchemy import text
 from app.database import engine
 from app.cron.bhavcopy.sync.base import (
     get_pending_files, load_file_chunks, mark_synced, mark_failed,
-    to_paise, to_int, to_float,
+    to_int, to_float,
     bulk_resolve_fo_nse, bulk_create_fo,
-    bulk_resolve_underlying_symbols, bulk_resolve_fo_contracts_by_underlying,
+    bulk_resolve_underlying_symbols,
     get_or_create_index,
 )
 
@@ -84,17 +84,16 @@ def _process_chunk(df: pd.DataFrame, trade_date_str: str, file_name: str) -> int
         return 0
     df["fin_id_parsed"] = df["fin_id_parsed"].astype(int)
 
-    # -- Pass 2: ONE SELECT for all unique fin_ids in this chunk --------------
+    # -- Pass 2: ONE SELECT for all unique fin_ids in this chunk, scoped to NSE --
     unique_fin_ids = df["fin_id_parsed"].unique().tolist()
     id_map = bulk_resolve_fo_nse(unique_fin_ids)
 
-    # -- Pass 3: batch-resolve missing contracts, bulk-create -----------------
+    # -- Pass 3: batch-resolve underlyings, bulk-create whatever NSE doesn't have yet
     missing_ids = [fid for fid in unique_fin_ids if fid not in id_map]
     if missing_ids:
-        linked, new_specs = _resolve_missing(missing_ids, df)
-        id_map.update(linked)
+        new_specs = _build_new_specs(missing_ids, df)
         if new_specs:
-            id_map.update(bulk_create_fo(new_specs, "nse_fininstrmid"))
+            id_map.update(bulk_create_fo(new_specs, "NSE"))
 
     # -- Pass 4: map instrument_ids vectorized --------------------------------
     df["inst_id_mapped"] = df["fin_id_parsed"].map(id_map)
@@ -111,49 +110,49 @@ def _process_chunk(df: pd.DataFrame, trade_date_str: str, file_name: str) -> int
     for row in df.itertuples(index=False):
         trade_date = str(getattr(row, "TradDt", trade_date_str)).strip()[:10]
         batch.append({
-            "instrument_id":          row.inst_id_mapped,
-            "exchange":               EXCHANGE,
-            "trade_date":             trade_date,
-            "open_price_paise":       to_paise(getattr(row, "OpnPric", None)),
-            "high_price_paise":       to_paise(getattr(row, "HghPric", None)),
-            "low_price_paise":        to_paise(getattr(row, "LwPric", None)),
-            "close_price_paise":      to_paise(getattr(row, "ClsPric", None)),
-            "last_price_paise":       to_paise(getattr(row, "LastPric", None)),
-            "prev_close_paise":       to_paise(getattr(row, "PrvsClsgPric", None)),
-            "underlying_price_paise": to_paise(getattr(row, "UndrlygPric", None)),
-            "settlement_price_paise": to_paise(getattr(row, "SttlmPric", None)),
-            "open_interest":          to_int(getattr(row, "OpnIntrst", None)),
-            "oi_change":              to_int(getattr(row, "ChngInOpnIntrst", None)),
-            "volume":                 to_int(getattr(row, "TtlTradgVol", None)),
-            "traded_value_rupees":    to_float(getattr(row, "TtlTrfVal", None)),
-            "num_trades":             to_int(getattr(row, "TtlNbOfTxsExctd", None)),
+            "instr_id":          row.inst_id_mapped,
+            "exchange":          EXCHANGE,
+            "trade_date":        trade_date,
+            "open_price":        to_float(getattr(row, "OpnPric", None)),
+            "high_price":        to_float(getattr(row, "HghPric", None)),
+            "low_price":         to_float(getattr(row, "LwPric", None)),
+            "close_price":       to_float(getattr(row, "ClsPric", None)),
+            "last_price":        to_float(getattr(row, "LastPric", None)),
+            "prev_close_price":  to_float(getattr(row, "PrvsClsgPric", None)),
+            "underlying_price":  to_float(getattr(row, "UndrlygPric", None)),
+            "settlement_price":  to_float(getattr(row, "SttlmPric", None)),
+            "open_interest":     to_int(getattr(row, "OpnIntrst", None)),
+            "oi_change":         to_int(getattr(row, "ChngInOpnIntrst", None)),
+            "volume":            to_int(getattr(row, "TtlTradgVol", None)),
+            "traded_value_rupees": to_float(getattr(row, "TtlTrfVal", None)),
+            "num_trades":        to_int(getattr(row, "TtlNbOfTxsExctd", None)),
         })
 
     if batch:
         with engine.begin() as conn:
             conn.execute(text("""
                 INSERT INTO fo_eod (
-                    instrument_id, exchange, trade_date,
-                    open_price_paise, high_price_paise, low_price_paise,
-                    close_price_paise, last_price_paise, prev_close_paise,
-                    underlying_price_paise, settlement_price_paise,
+                    instr_id, exchange, trade_date,
+                    open_price, high_price, low_price,
+                    close_price, last_price, prev_close_price,
+                    underlying_price, settlement_price,
                     open_interest, oi_change, volume, traded_value_rupees, num_trades
                 ) VALUES (
-                    :instrument_id, :exchange, :trade_date,
-                    :open_price_paise, :high_price_paise, :low_price_paise,
-                    :close_price_paise, :last_price_paise, :prev_close_paise,
-                    :underlying_price_paise, :settlement_price_paise,
+                    :instr_id, :exchange, :trade_date,
+                    :open_price, :high_price, :low_price,
+                    :close_price, :last_price, :prev_close_price,
+                    :underlying_price, :settlement_price,
                     :open_interest, :oi_change, :volume, :traded_value_rupees, :num_trades
                 )
-                ON CONFLICT(instrument_id, exchange, trade_date) DO UPDATE SET
-                    open_price_paise=excluded.open_price_paise,
-                    high_price_paise=excluded.high_price_paise,
-                    low_price_paise=excluded.low_price_paise,
-                    close_price_paise=excluded.close_price_paise,
-                    last_price_paise=excluded.last_price_paise,
-                    prev_close_paise=excluded.prev_close_paise,
-                    underlying_price_paise=excluded.underlying_price_paise,
-                    settlement_price_paise=excluded.settlement_price_paise,
+                ON CONFLICT(instr_id, exchange, trade_date) DO UPDATE SET
+                    open_price=excluded.open_price,
+                    high_price=excluded.high_price,
+                    low_price=excluded.low_price,
+                    close_price=excluded.close_price,
+                    last_price=excluded.last_price,
+                    prev_close_price=excluded.prev_close_price,
+                    underlying_price=excluded.underlying_price,
+                    settlement_price=excluded.settlement_price,
                     open_interest=excluded.open_interest,
                     oi_change=excluded.oi_change,
                     volume=excluded.volume,
@@ -167,14 +166,20 @@ def _process_chunk(df: pd.DataFrame, trade_date_str: str, file_name: str) -> int
     return len(batch)
 
 
-def _resolve_missing(missing_ids: list[int], df: pd.DataFrame) -> tuple[dict[int, int], list[dict]]:
+def _build_new_specs(missing_ids: list[int], df: pd.DataFrame) -> list[dict]:
     """
-    Batch-resolve all missing fin_ids to instrument_ids using 3 total SELECTs
-    (2 for symbol lookup + 1 for contract lookup) instead of N queries per fin_id.
+    Batch-resolve underlyings for all missing fin_ids (one lookup per unique
+    symbol, not per fin_id), then build the create-spec for each.
+
+    No cross-exchange contract-matching here anymore (removed, along with
+    bulk_resolve_fo_contracts_by_underlying in base.py) — NSE and BSE
+    contracts are separate rows by design now (exchange discriminator), so
+    there's no "maybe BSE already created this" row to find and link to.
+    bulk_resolve_fo_nse already told us this exact fin_id doesn't exist on
+    NSE; that's the only check needed before creating.
     """
     missing_set = set(missing_ids)
 
-    # One representative row per missing fin_id
     fid_meta: dict[int, dict] = {}
     subset = df[df["fin_id_parsed"].isin(missing_set)].drop_duplicates("fin_id_parsed")
     for row in subset.itertuples(index=False):
@@ -209,33 +214,17 @@ def _resolve_missing(missing_ids: list[int], df: pd.DataFrame) -> tuple[dict[int
         }
 
     if not fid_meta:
-        return {}, []
+        return []
 
-    # BATCH 1: resolve all unique symbols -> underlying instrument_id (2 SELECTs)
     unique_symbols = list({m["symbol"] for m in fid_meta.values()})
     symbol_map = bulk_resolve_underlying_symbols(unique_symbols)
     for sym in unique_symbols:
         if sym not in symbol_map:
             symbol_map[sym] = get_or_create_index(sym, EXCHANGE)
 
-    # BATCH 2: resolve all existing contracts (1 SELECT)
-    underlying_ids = list({symbol_map[m["symbol"]] for m in fid_meta.values()})
-    contract_map = bulk_resolve_fo_contracts_by_underlying(underlying_ids)
-
-    linked:      dict[int, int] = {}
-    new_specs:   list[dict]     = []
-    link_updates: list[dict]    = []
-
+    new_specs: list[dict] = []
     for fid, meta in fid_meta.items():
         underlying_id = symbol_map[meta["symbol"]]
-        contract_key  = (underlying_id, meta["expiry_date"], meta["strike_paise"], meta["option_type"])
-        existing_id   = contract_map.get(contract_key)
-
-        if existing_id:
-            link_updates.append({"fid": fid, "iid": existing_id})
-            linked[fid] = existing_id
-            continue
-
         inst_kind = _TYPE_MAP.get(meta["instr_type"], "FUTURES")
         symbol    = meta["symbol"]
         name = (
@@ -256,15 +245,7 @@ def _resolve_missing(missing_ids: list[int], df: pd.DataFrame) -> tuple[dict[int
             "lot_size":      meta["lot_size"],
         })
 
-    # Batch UPDATE nse_fininstrmid for linked contracts
-    if link_updates:
-        with engine.begin() as conn:
-            conn.execute(
-                text("UPDATE instrument_derivatives SET nse_fininstrmid=:fid WHERE instrument_id=:iid"),
-                link_updates,
-            )
-
-    return linked, new_specs
+    return new_specs
 
 
 def _stats(synced, failed, rows, errors):

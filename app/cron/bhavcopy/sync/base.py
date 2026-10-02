@@ -308,43 +308,14 @@ def get_or_create_mf(amfi_code: str, name: str, fund_house: str = None,
     return instrument_id
 
 
-# -- Batch latest_prices upsert -----------------------------------------------
+# -- Latest-price upsert -------------------------------------------------------
 
-def batch_upsert_latest_prices(rows: list[dict]):
-    """
-    Batch upsert into latest_prices.
-    Each row: {instrument_id, exchange, price_date, open_price_paise,
-               high_price_paise, low_price_paise, close_price_paise}
-    """
-    if not rows:
-        return
-    # Keep only the most recent price per instrument_id (rows are date-ordered)
-    deduped: dict[int, dict] = {}
-    for r in rows:
-        deduped[r["instrument_id"]] = r
-    batch = list(deduped.values())
-    with engine.begin() as conn:
-        conn.execute(text("""
-            INSERT INTO latest_prices
-                (instrument_id, exchange, price_date,
-                 open_price_paise, high_price_paise,
-                 low_price_paise, close_price_paise,
-                 last_synced_at, updated_at)
-            VALUES
-                (:instrument_id, :exchange, :price_date,
-                 :open_price_paise, :high_price_paise,
-                 :low_price_paise, :close_price_paise,
-                 datetime('now'), datetime('now'))
-            ON CONFLICT(instrument_id) DO UPDATE SET
-                exchange          = excluded.exchange,
-                price_date        = excluded.price_date,
-                open_price_paise  = excluded.open_price_paise,
-                high_price_paise  = excluded.high_price_paise,
-                low_price_paise   = excluded.low_price_paise,
-                close_price_paise = excluded.close_price_paise,
-                last_synced_at    = datetime('now'),
-                updated_at        = datetime('now')
-        """), batch)
+def upsert_latest_prices(db, rows: list[dict]) -> None:
+    """Each row: {instr_id, exchange, price_date, price} (REAL rupees) —
+    delegates to dao.prices.upsert_latest, which dedupes by instr_id and
+    sets last_synced_at. Does not commit — caller commits once per file,
+    same as every other in-scope base.py adapter."""
+    dao.prices.upsert_latest(db, rows)
 
 
 # -- Bulk create helpers -------------------------------------------------------

@@ -16,7 +16,9 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from arthdesk_db import Database
-from arthdesk_instruments import init_schema, instrument_equity, instrument_derivatives, equity_eod, fo_eod
+from arthdesk_instruments import (
+    init_schema, instrument_equity, instrument_derivatives, equity_eod, fo_eod, latest_prices,
+)
 
 from app.cron.bhavcopy.sync import nse_eq, bse_eq, nse_fo, bse_fo
 
@@ -63,6 +65,11 @@ def _fo_eod_rows(engine):
         return [dict(r) for r in conn.execute(select(fo_eod)).mappings()]
 
 
+def _latest_price_rows(engine):
+    with engine.connect() as conn:
+        return [dict(r) for r in conn.execute(select(latest_prices)).mappings()]
+
+
 class TestNseEquitySync:
     def test_creates_instrument_and_eod_row_with_real_rupees(self, sync_engine, db, monkeypatch):
         df = pd.DataFrame([{
@@ -93,6 +100,12 @@ class TestNseEquitySync:
         assert eod_rows[0]["close_price"] == 2530.50
         assert isinstance(eod_rows[0]["close_price"], float)  # REAL rupees, not paise int
 
+        latest_rows = _latest_price_rows(sync_engine)
+        assert len(latest_rows) == 1
+        assert latest_rows[0]["exchange"] == "NSE"
+        assert latest_rows[0]["price"] == 2530.50
+        assert latest_rows[0]["last_synced_at"] is not None
+
     def test_second_sync_updates_existing_instrument_not_duplicate(self, sync_engine, db, monkeypatch):
         df1 = pd.DataFrame([{
             "ISIN": "INE002A01018", "TckrSymb": "RELIANCE", "FinInstrmNm": "Reliance Industries",
@@ -117,6 +130,11 @@ class TestNseEquitySync:
         eod_rows = _equity_eod_rows(sync_engine)
         assert len(eod_rows) == 2  # one EOD row per day
 
+        latest_rows = _latest_price_rows(sync_engine)
+        assert len(latest_rows) == 1  # one cache row, not one per day
+        assert latest_rows[0]["price"] == 2550.0  # day 2's close, not day 1's
+        assert latest_rows[0]["price_date"] == "2026-09-26"
+
 
 class TestBseEquitySync:
     def test_bse_fin_instr_id_maps_to_bse_id_not_bse_sym(self, sync_engine, db, monkeypatch):
@@ -139,6 +157,11 @@ class TestBseEquitySync:
         assert rows[0]["bse_id"] == 532977
         assert rows[0]["bse_sym"] == "BAJAJ-AUTO"
         assert rows[0]["nse_sym"] is None  # must NOT leak into the NSE field
+
+        latest_rows = _latest_price_rows(sync_engine)
+        assert len(latest_rows) == 1
+        assert latest_rows[0]["exchange"] == "BSE"
+        assert latest_rows[0]["price"] == 11300.0
 
 
 class TestFoSyncNseAndBseStaySeparate:
@@ -203,3 +226,52 @@ class TestFoSyncNseAndBseStaySeparate:
         rows = _derivatives_rows(sync_engine)
         assert len(rows) == 1
         assert rows[0]["contract_type"] == "STF"
+
+
+class TestFoLatestPrices:
+    """New coverage: F&O sync never wrote latest_prices before this round
+    (an equity-only gap from Phase 4)."""
+
+    def test_nse_fo_sync_writes_latest_price(self, sync_engine, db, monkeypatch):
+        eq_df = pd.DataFrame([{"ISIN": "INE002A01018", "TckrSymb": "RELIANCE", "ClsPric": "2500.00"}])
+        monkeypatch.setattr(nse_eq, "load_file_df", lambda *a, **k: eq_df)
+        nse_eq._process_file(db, "eq.csv", "2026-09-25")
+        db.commit()
+
+        fo_df = pd.DataFrame([{
+            "FinInstrmId": "9001", "TckrSymb": "RELIANCE", "FinInstrmTp": "STF",
+            "XpryDt": "2026-09-25", "StrkPric": "0", "OptnTp": "",
+            "ClsPric": "2510.00", "TradDt": "2026-09-25",
+        }])
+        monkeypatch.setattr(nse_fo, "load_file_chunks", lambda *a, **k: [fo_df])
+        nse_fo._process_file(db, "fo.csv", "2026-09-25")
+        db.commit()
+
+        derivative_id = _derivatives_rows(sync_engine)[0]["instr_id"]
+        latest_rows = _latest_price_rows(sync_engine)
+        fo_latest = [r for r in latest_rows if r["instr_id"] == derivative_id]
+        assert len(fo_latest) == 1
+        assert fo_latest[0]["exchange"] == "NSE"
+        assert fo_latest[0]["price"] == 2510.0
+
+    def test_bse_fo_sync_writes_latest_price(self, sync_engine, db, monkeypatch):
+        eq_df = pd.DataFrame([{"ISIN": "INE002A01018", "TckrSymb": "RELIANCE", "ClsPric": "2500.00"}])
+        monkeypatch.setattr(nse_eq, "load_file_df", lambda *a, **k: eq_df)
+        nse_eq._process_file(db, "eq.csv", "2026-09-25")
+        db.commit()
+
+        fo_df = pd.DataFrame([{
+            "FinInstrmId": "9002", "TckrSymb": "RELIANCE", "FinInstrmTp": "STF",
+            "XpryDt": "2026-09-25", "StrkPric": "0", "OptnTp": "",
+            "ClsPric": "2520.00", "TradDt": "2026-09-25",
+        }])
+        monkeypatch.setattr(bse_fo, "load_file_df", lambda *a, **k: fo_df)
+        bse_fo._process_file(db, "fo.csv", "2026-09-25")
+        db.commit()
+
+        derivative_id = _derivatives_rows(sync_engine)[0]["instr_id"]
+        latest_rows = _latest_price_rows(sync_engine)
+        fo_latest = [r for r in latest_rows if r["instr_id"] == derivative_id]
+        assert len(fo_latest) == 1
+        assert fo_latest[0]["exchange"] == "BSE"
+        assert fo_latest[0]["price"] == 2520.0

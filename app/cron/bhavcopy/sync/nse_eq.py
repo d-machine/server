@@ -29,7 +29,7 @@ from app.cron.bhavcopy.sync.base import (
     get_pending_files, load_file_df, mark_synced, mark_failed,
     to_int, to_float,
     bulk_resolve_equity, bulk_create_equity, bulk_update_equity_fields,
-    batch_upsert_latest_prices,
+    upsert_latest_prices,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,13 +162,10 @@ def _process_file(db, file_name: str, trade_date_str: str) -> int:
             "num_trades":           to_int(row.get("TtlNbOfTxsExctd")),
         })
         latest_batch.append({
-            "instrument_id":    inst_id,
-            "exchange":         EXCHANGE,
-            "price_date":       trade_date,
-            "open_price_paise": to_int(round(o * 100)) if o is not None else None,
-            "high_price_paise": to_int(round(h * 100)) if h is not None else None,
-            "low_price_paise":  to_int(round(l * 100)) if l is not None else None,
-            "close_price_paise": int(round(c * 100)),
+            "instr_id":   inst_id,
+            "exchange":   EXCHANGE,
+            "price_date": trade_date,
+            "price":      c,
         })
 
     # -- Pass 6: batch upserts ---------------------------------------------------
@@ -199,13 +196,7 @@ def _process_file(db, file_name: str, trade_date_str: str) -> int:
                 num_trades=excluded.num_trades
         """), eod_batch)
 
-    # latest_prices is deferred (dao.prices not built yet, still on its own
-    # raw-engine connection internally) — don't let its now-broken schema
-    # block the in-scope equity_eod write above.
-    try:
-        batch_upsert_latest_prices(latest_batch)
-    except Exception:
-        logger.exception("[%s] latest_prices upsert failed (deferred, not migrated yet)", SOURCE)
+    upsert_latest_prices(db, latest_batch)
 
     if skipped:
         logger.debug("[%s] %s -- skipped %d rows", SOURCE, file_name, skipped)

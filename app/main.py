@@ -5,18 +5,20 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from arthdesk_db import Database
+
 from app.db_init import init as init_db
 from app.auth_db_init import init as init_auth_db
+from app.database import get_db, db_session
 from app.routers import instruments, prices, bhavcopy as bhavcopy_router
 from app.routers import auth as auth_router, subscriptions as subs_router, persons as persons_router, tickets as tickets_router
-from app.cron.fetch_prices import run_all as run_eod_fetch, warm_cache
+from app.routers import parsers as parsers_router
+from app import cache
 from app.cron.populate_instruments import run_all as populate_instruments
-from app.cron.download_bhavcopy import download_all as download_bhavcopy
-from app.cron.sync_bhavcopy import sync_pending as sync_bhavcopy
 
 _logs_dir = Path(os.getenv("LOGS_PATH", "logs"))
 _logs_dir.mkdir(parents=True, exist_ok=True)
@@ -120,7 +122,8 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     init_db()
     init_auth_db()
-    warm_cache(date.today())
+    with db_session() as db:
+        cache.warm_cache(db)
 
     from apscheduler.schedulers.background import BackgroundScheduler
     _scheduler = BackgroundScheduler()
@@ -158,6 +161,7 @@ app.include_router(persons_router.router,   prefix="/persons",        tags=["per
 app.include_router(instruments.router,      prefix="/instruments",    tags=["instruments"])
 app.include_router(prices.router,           prefix="/prices",         tags=["prices"])
 app.include_router(bhavcopy_router.router,  prefix="/admin/bhavcopy", tags=["bhavcopy"])
+app.include_router(parsers_router.router,   prefix="/parsers",        tags=["parsers"])
 
 
 _LOCAL_DEV = os.getenv("LOCAL_DEV", "").lower() in ("1", "true", "yes")
@@ -179,34 +183,19 @@ def serve_screenshot(filename: str):
     return FileResponse(path)
 
 
-@app.post("/admin/fetch-prices")
-def admin_fetch_prices(
-    trade_date: Optional[str] = Query(None, description="Date YYYY-MM-DD. Defaults to today."),
-    force: bool = Query(False, description="Skip trading-day check."),
-):
-    """Manually trigger the EOD price fetch for a given date."""
-    parsed_date = None
-    if trade_date:
-        try:
-            from datetime import datetime
-            parsed_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
-        except ValueError:
-            return {"error": f"Invalid date: {trade_date}. Use YYYY-MM-DD."}
-    return run_eod_fetch(parsed_date, force=force)
-
-
 @app.post("/admin/populate-instruments")
 def admin_populate_instruments():
     """Manually trigger instrument master population from NSE/BSE/AMFI. Idempotent."""
     return populate_instruments()
 
 
-@app.post("/admin/download-bhavcopy")
-def admin_download_bhavcopy(
+@app.post("/admin/warm-price-cache")
+def admin_warm_price_cache(
     trade_date: Optional[str] = Query(None, description="Date YYYY-MM-DD. Defaults to today."),
-    force: bool = Query(False, description="Re-download even if file already exists."),
+    db: Database = Depends(get_db),
 ):
-    """Download NSE/BSE bhavcopy files for a given date."""
+    """Manually refresh the in-memory price cache from latest_prices — use
+    after a manual /admin/bhavcopy/parse run, without restarting the server."""
     parsed_date = None
     if trade_date:
         try:
@@ -214,13 +203,8 @@ def admin_download_bhavcopy(
             parsed_date = _dt.strptime(trade_date, "%Y-%m-%d").date()
         except ValueError:
             return {"error": f"Invalid date: {trade_date}. Use YYYY-MM-DD."}
-    return download_bhavcopy(parsed_date, force=force)
-
-
-@app.post("/admin/sync-bhavcopy")
-def admin_sync_bhavcopy():
-    """Parse downloaded bhavcopy files and upsert prices into DB."""
-    return sync_bhavcopy()
+    cache.warm_cache(db, parsed_date)
+    return {"status": "warmed", "date": (parsed_date or date.today()).isoformat()}
 
 
 @app.get("/admin/bhavcopy-status")

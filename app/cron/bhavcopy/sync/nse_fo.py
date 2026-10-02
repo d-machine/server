@@ -27,6 +27,7 @@ from app.cron.bhavcopy.sync.base import (
     bulk_resolve_fo_nse, bulk_create_fo,
     bulk_resolve_underlying_symbols,
     get_or_create_index,
+    upsert_latest_prices,
 )
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,13 @@ def _process_chunk(db, df: pd.DataFrame, trade_date_str: str, file_name: str) ->
         })
 
     if batch:
+        latest_batch = [
+            {"instr_id": row["instr_id"], "exchange": row["exchange"],
+             "price_date": row["trade_date"], "price": row["close_price"]}
+            for row in batch if row["close_price"] is not None
+        ]
+        upsert_latest_prices(db, latest_batch)
+
         db.execute(text("""
             INSERT INTO fo_eod (
                 instr_id, exchange, trade_date,

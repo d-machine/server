@@ -1,10 +1,17 @@
 """Tests for /prices/* endpoints."""
 
-from unittest.mock import patch
-import pytest
 from sqlalchemy import text
 
 from tests.conftest import seed_equity
+
+
+def _seed_latest_price(main_engine, instr_id, price=2530.5, exchange="NSE",
+                        price_date="2026-09-25"):
+    with main_engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO latest_prices (instr_id, exchange, price_date, price, last_synced_at)
+            VALUES (:iid, :exch, :pd, :price, datetime('now'))
+        """), {"iid": instr_id, "exch": exchange, "pd": price_date, "price": price})
 
 
 # ── Subscription gate ─────────────────────────────────────────────────────────
@@ -39,30 +46,7 @@ class TestPricesLatest:
         r = client.get("/prices/latest", headers=bearer_with_sub)
         assert r.status_code == 200
         data = r.json()
-        assert isinstance(data, (list, dict))
-
-    def test_latest_with_data(self, client, bearer_with_sub, main_engine):
-        from sqlalchemy import text
-        isin = "INE555555555"
-        iid = seed_equity(main_engine, isin=isin, symbol="PRICESYM")
-        with main_engine.begin() as conn:
-            conn.execute(text("""
-                INSERT INTO latest_prices (instrument_id, price_date, close_price_paise, last_synced_at, updated_at)
-                VALUES (:iid, date('now'), 15050, datetime('now'), datetime('now'))
-            """), {"iid": iid})
-        r = client.get("/prices/latest", headers=bearer_with_sub)
-        assert r.status_code == 200
-
-    def test_latest_with_isin_filter(self, client, bearer_with_sub, main_engine):
-        isin = "INE666666666"
-        iid = seed_equity(main_engine, isin=isin, symbol="FILTERSYM")
-        with main_engine.begin() as conn:
-            conn.execute(
-                text("INSERT INTO latest_prices (instrument_id, price_date, close_price_paise, last_synced_at, updated_at) VALUES (:iid, date('now'), 20000, datetime('now'), datetime('now'))"),
-                {"iid": iid}
-            )
-        r = client.get(f"/prices/latest?isins={isin}", headers=bearer_with_sub)
-        assert r.status_code == 200
+        assert data["prices"] == {}
 
 
 # ── /prices/sync ─────────────────────────────────────────────────────────────
@@ -71,10 +55,39 @@ class TestPricesSync:
     def test_sync_empty_list(self, client, bearer_with_sub):
         r = client.get("/prices/sync", headers=bearer_with_sub)
         assert r.status_code == 200
+        assert r.json()["prices"] == []
 
-    def test_sync_unknown_isin(self, client, bearer_with_sub):
-        r = client.get("/prices/sync?isins=INE000000000", headers=bearer_with_sub)
+    def test_sync_unknown_instrument_id(self, client, bearer_with_sub):
+        r = client.get("/prices/sync?instrument_ids=999999", headers=bearer_with_sub)
         assert r.status_code == 200
+        assert r.json()["prices"] == []
+
+    def test_sync_returns_real_price_for_known_instrument(self, client, bearer_with_sub, main_engine):
+        iid = seed_equity(main_engine, isin="INE555555555", symbol="PRICESYM")
+        _seed_latest_price(main_engine, iid, price=2530.5)
+
+        r = client.get(f"/prices/sync?instrument_ids={iid}", headers=bearer_with_sub)
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["prices"]) == 1
+        row = data["prices"][0]
+        assert row["instrument_id"] == iid
+        assert row["exchange"] == "NSE"
+        assert row["price"] == 2530.5
+        assert isinstance(row["price"], float)
+        assert data["synced_at"] is not None
+
+    def test_sync_since_datetime_excludes_unchanged_rows(self, client, bearer_with_sub, main_engine):
+        iid = seed_equity(main_engine, isin="INE666666666", symbol="FILTERSYM")
+        _seed_latest_price(main_engine, iid, price=2000.0)
+
+        far_future = "9999-01-01T00:00:00"
+        r = client.get(
+            f"/prices/sync?instrument_ids={iid}&since_datetime={far_future}",
+            headers=bearer_with_sub,
+        )
+        assert r.status_code == 200
+        assert r.json()["prices"] == []
 
 
 # ── Trading calendar ──────────────────────────────────────────────────────────
@@ -93,17 +106,10 @@ class TestTradingCalendar:
 
 class TestPriceCacheModule:
     def test_cache_import(self):
-        """The price cache module should be importable."""
-        try:
-            from app import price_cache  # or wherever it lives
-        except ImportError:
-            try:
-                from app.routers import prices as p
-                assert hasattr(p, "router")
-            except ImportError:
-                pytest.skip("price cache module not found")
+        from app import cache
+        assert hasattr(cache, "warm_cache")
 
-    def test_latest_prices_returns_dict_or_list(self, client, bearer_with_sub):
+    def test_latest_prices_returns_dict(self, client, bearer_with_sub):
         r = client.get("/prices/latest", headers=bearer_with_sub)
         assert r.status_code == 200
-        assert isinstance(r.json(), (list, dict))
+        assert isinstance(r.json()["prices"], dict)

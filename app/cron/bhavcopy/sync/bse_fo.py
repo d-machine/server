@@ -27,6 +27,7 @@ from app.cron.bhavcopy.sync.base import (
     to_int, to_float,
     bulk_resolve_fo_bse, bulk_create_fo,
     get_underlying_instrument_id, get_or_create_index,
+    upsert_latest_prices,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,13 @@ def _process_file(db, file_name: str, trade_date_str: str) -> int:
         })
 
     if batch:
+        latest_batch = [
+            {"instr_id": row["instr_id"], "exchange": row["exchange"],
+             "price_date": row["trade_date"], "price": row["close_price"]}
+            for row in batch if row["close_price"] is not None
+        ]
+        upsert_latest_prices(db, latest_batch)
+
         db.execute(text("""
             INSERT INTO fo_eod (
                 instr_id, exchange, trade_date,

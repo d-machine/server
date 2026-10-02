@@ -9,9 +9,11 @@ them the way `bse_symbol`/`MF`/`instrument_type` previously did. See
 `app/tables.py` (imports) and `app/db_init.py` (`init_schema()` creates/seeds them).
 
 **MF, MCX, fixed income, and all price tables (`latest_prices`, `equity_eod`, `fo_eod`, `mcx_eod`,
-`mf_nav`) are also sourced from the same package now** (schema only — no shared DAO layer exists yet
-for these, so the server's own query code for them is still being migrated; `app/routers/prices.py`
-and the MF branch of `/instruments/search` are known-broken until that lands).
+`mf_nav`) are also sourced from the same package now** (schema only). Equity/derivatives prices are
+fully wired up: `arthdesk_instruments.dao.prices` + the bhavcopy sync jobs write `latest_prices`/
+`equity_eod`/`fo_eod` for real, and `app/routers/prices.py` reads through the same DAO. MF/MCX have
+no DAO layer yet, so `mf_nav`/`mcx_eod` and the MF branch of `/instruments/search` remain
+known-broken until that lands.
 
 ## Key differences from the old (pre-Phase-4) schema
 
@@ -172,11 +174,12 @@ arthdesk_instruments.dao.*   (duck-types on Database.execute — same calls work
 
 ### Still TODO (known, deliberately deferred)
 
-- MF/MCX/prices querying in `base.py` and `app/routers/prices.py` / the MF branch of
-  `/instruments/search` — no shared DAO layer exists yet for these, so they're still on ad-hoc
-  raw SQL against a schema that's already drifted (see the warning at the top of this doc). They
-  get the `Database`-everywhere treatment in the same round their DAO migration happens, not
-  before.
+- MF/MCX querying in `base.py` (`bulk_create_mf`, `bulk_resolve_mcx`, `get_or_create_mf`,
+  `bulk_create_mcx`, `_get_type_id`) and the MF branch of `/instruments/search` — no shared DAO
+  layer exists yet for these, so they're still on ad-hoc raw SQL against a schema that's already
+  drifted (see the warning at the top of this doc). They get the `Database`-everywhere treatment in
+  the same round their DAO migration happens, not before. (Equity/derivatives prices are done —
+  see `arthdesk_instruments.dao.prices` and `base.py`'s `upsert_latest_prices`.)
 - `app/cron/bhavcopy/*.py` (the download/register side, not `sync/`) — a different lifecycle
   stage of `bhavcopy_files` (download status, not sync status) and a separate concern from
   instrument querying. Flagged, not yet migrated.

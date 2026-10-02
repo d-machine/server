@@ -159,10 +159,10 @@ arthdesk_instruments.dao.*   (duck-types on Database.execute — same calls work
   mid-file could previously leave price rows written but the file still marked `DOWNLOADED`, or
   vice versa; now it's all-or-nothing per file.
 - `app/cron/bhavcopy/sync/base.py` holds the adapters each sync job calls (`bulk_resolve_equity`,
-  `bulk_create_fo`, `get_or_create_index`, etc.) — every in-scope one takes `db` as its first
-  argument and does no internal connection management or commit; the caller (`run()`) commits
-  once. The still-deferred MF/MCX/prices helpers in the same file (`bulk_create_mf`,
-  `bulk_resolve_mcx`, `batch_upsert_latest_prices`, `_get_type_id`) are the one exception —
+  `bulk_create_fo`, `get_or_create_index`, `upsert_latest_prices`, etc.) — every in-scope one takes
+  `db` as its first argument and does no internal connection management or commit; the caller
+  (`run()`) commits once. The still-deferred MF/MCX helpers in the same file (`bulk_create_mf`,
+  `bulk_resolve_mcx`, `get_or_create_mf`, `bulk_create_mcx`, `_get_type_id`) are the one exception —
   they still open their own `engine.connect()`/`engine.begin()`, since they serve paths that are
   already broken pending their own DAO migration (see "Still TODO" below); fixing their access
   pattern without fixing the underlying schema mismatch would be wasted effort.
@@ -171,6 +171,55 @@ arthdesk_instruments.dao.*   (duck-types on Database.execute — same calls work
   init_schema()` itself takes a raw `engine` for the same reason — it manages its own
   `engine.begin()` internally, so it can't be handed a `Database`/`Connection` that's already
   inside another transaction.
+
+## Price pipeline (equity/derivatives)
+
+`latest_prices` (one REAL `price` per `instr_id`, see the ERD above) and the append-only
+`equity_eod`/`fo_eod` history tables are populated by one pipeline, end to end:
+
+```
+app/cron/bhavcopy/{nse_eq,bse_eq,nse_fo,bse_fo}.py   (download CSVs to local disk)
+      │
+      ▼
+app/cron/bhavcopy/sync/{nse_eq,bse_eq,nse_fo,bse_fo}.py   (parse, one db_session() per file)
+      │                                      │
+      ▼                                      ▼
+  equity_eod / fo_eod                  arthdesk_instruments.dao.prices.upsert_latest(db, rows)
+  (db.execute INSERT ... ON CONFLICT)        │
+                                              ▼
+                                        latest_prices
+                                              │
+                                              ▼
+                              app/cache.py's warm_cache(db) — in-memory, by date
+                                              │
+                                              ▼
+                                   app/routers/prices.py (/prices/latest, /prices/sync)
+```
+
+- Each sync job builds a `latest_batch` of `{instr_id, exchange, price_date, price}` (REAL rupees,
+  the close price) alongside its `equity_eod`/`fo_eod` batch, and calls
+  `upsert_latest_prices(db, latest_batch)` — part of the same per-file `Database`/transaction as
+  everything else (see "Database access layering" above), so a file's EOD history and its
+  `latest_prices` cache row are written atomically together. `dao.prices.upsert_latest` dedupes by
+  `instr_id` (keeping the last row if a batch has duplicates) and always bumps `last_synced_at`.
+- `/prices/sync` is the client-facing incremental endpoint: `instrument_ids` + optional
+  `since_datetime`, reading via `dao.prices.get_latest`. There is no ISIN-based or historical
+  `since_date` path anymore — those were pre-migration remnants nothing actually called (the
+  desktop client's price sync is still a stub); a client that only has an ISIN resolves it to an
+  `instrument_id` via `/instruments/search` first, same as every other migrated endpoint.
+- `/prices/latest` is a pure in-memory cache read (`app/cache.py`), warmed from
+  `dao.prices.get_all_latest_for_date` at app startup and, manually, via
+  `POST /admin/warm-price-cache` after running `/admin/bhavcopy/parse` — there's no automatic
+  "parse just finished, re-warm the cache" wiring yet (the pipeline is admin-triggered per source
+  per step by design; see the `lifespan()` comment in `app/main.py`).
+- A second, independent price pipeline (`app/cron/fetch_prices.py`, `download_bhavcopy.py`,
+  `sync_bhavcopy.py` — live NSE/BSE/AMFI HTTP fetch, pre-Phase-4) was deleted rather than fixed: it
+  wrote to tables (`daily_prices`, `nav_history`, `instruments.isin`) that don't exist anymore, and
+  its download half wrote `bhavcopy_files.status` as a string while the pipeline above writes the
+  `FileStatus` int enum into the same column — an active corruption risk if both had stayed live,
+  not just redundancy.
+- MF (`mf_nav`) and MCX (`mcx_eod`) prices are **not** part of this pipeline — no DAO layer exists
+  for them yet; see "Still TODO" below.
 
 ### Still TODO (known, deliberately deferred)
 

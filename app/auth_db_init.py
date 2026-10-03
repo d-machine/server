@@ -91,6 +91,17 @@ SCHEMA_SQL = [
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 )""",
 
+# OTA parsers — admin registers a parser version, desktop apps download it.
+# file_name is relative to PARSERS_PATH env var (default: data/parsers/).
+"""CREATE TABLE IF NOT EXISTS parsers (
+    source          TEXT    PRIMARY KEY,
+    version         TEXT    NOT NULL,
+    checksum_sha256 TEXT    NOT NULL,
+    file_name       TEXT    NOT NULL,
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+)""",
+
 ]
 
 INDEX_SQL = [

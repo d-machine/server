@@ -1,6 +1,8 @@
 services:
   portfolio-server:
-    build: .
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
     container_name: portfolio-server
     expose:
       - "8000"

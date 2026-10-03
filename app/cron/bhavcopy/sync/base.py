@@ -4,6 +4,7 @@ Shared utilities for all bhavcopy sync parsers.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -23,6 +24,19 @@ logger = logging.getLogger(__name__)
 # Module-level cache: instrument type name → instrument_type_id (server IDs)
 _type_id_cache: dict[str, int] = {}
 
+# Guards the resolve-then-create window for shared instrument identity
+# tables (instrument_equity, instrument_derivatives, instrument_index)
+# across sync jobs running concurrently in separate threads (e.g. NSE_EQ and
+# BSE_EQ parsed at the same time both see a newly-listed ISIN as "missing"
+# and both try to create it -- a real UNIQUE-constraint race, confirmed in
+# production). Must be held from before the first resolve call through the
+# commit that makes a newly-created row visible to other sessions --
+# releasing it between "create" and "commit" would just move the race
+# window, not remove it. A plain threading.Lock is correct here specifically
+# because the server runs as one uvicorn process (no --workers): it would
+# NOT coordinate across separate worker processes if that ever changed.
+instrument_write_lock = threading.Lock()
+
 
 def _get_type_id(name: str) -> Optional[int]:
     """Lookup instrument_type_id by name, with module-level cache."""
@@ -39,14 +53,23 @@ def _get_type_id(name: str) -> Optional[int]:
 
 # -- File tracking ------------------------------------------------------------
 
-def get_pending_files(db, source: str) -> list[dict]:
-    """Return all bhavcopy_files with status=DOWNLOADED for given source."""
-    rows = db.fetch_all(text("""
+def get_pending_files(db, source: str, include_failed: bool = False) -> list[dict]:
+    """Return bhavcopy_files for this source that are candidates for (re-)
+    parsing: status=DOWNLOADED always; status=SYNC_FAILED too when
+    include_failed=True (the `force` flag on each sync job's run()) — a
+    file once marked SYNC_FAILED would otherwise never be picked up again
+    through the API, `force` or not."""
+    statuses = [int(FileStatus.DOWNLOADED)]
+    if include_failed:
+        statuses.append(int(FileStatus.SYNC_FAILED))
+    placeholders = ",".join(f":status{i}" for i in range(len(statuses)))
+    params = {"src": source, **{f"status{i}": s for i, s in enumerate(statuses)}}
+    rows = db.fetch_all(text(f"""
         SELECT id, file_name, trade_date
         FROM bhavcopy_files
-        WHERE source = :src AND status = :status
+        WHERE source = :src AND status IN ({placeholders})
         ORDER BY trade_date ASC
-    """), {"src": source, "status": int(FileStatus.DOWNLOADED)})
+    """), params)
     return [{"id": r["id"], "file_name": r["file_name"], "trade_date": r["trade_date"]} for r in rows]
 
 

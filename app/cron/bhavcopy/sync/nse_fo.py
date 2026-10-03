@@ -28,6 +28,7 @@ from app.cron.bhavcopy.sync.base import (
     bulk_resolve_underlying_symbols,
     get_or_create_index,
     upsert_latest_prices,
+    instrument_write_lock,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ _TYPE_MAP = {
 
 def run(force: bool = False) -> dict:
     with db_session() as db:
-        files = get_pending_files(db, SOURCE)
+        files = get_pending_files(db, SOURCE, include_failed=force)
     if not files:
         return _stats(0, 0, 0, [])
 
@@ -55,7 +56,7 @@ def run(force: bool = False) -> dict:
 
     for f in files:
         try:
-            with db_session() as db:
+            with instrument_write_lock, db_session() as db:
                 rows = _process_file(db, f["file_name"], f["trade_date"])
                 mark_synced(db, f["file_name"], rows)
                 db.commit()

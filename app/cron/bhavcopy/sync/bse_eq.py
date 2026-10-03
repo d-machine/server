@@ -27,6 +27,7 @@ from app.cron.bhavcopy.sync.base import (
     to_int, to_float,
     bulk_resolve_equity, bulk_create_equity, bulk_update_equity_fields,
     upsert_latest_prices,
+    instrument_write_lock,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ EXCHANGE = "BSE"
 
 def run(force: bool = False) -> dict:
     with db_session() as db:
-        files = get_pending_files(db, SOURCE)
+        files = get_pending_files(db, SOURCE, include_failed=force)
     if not files:
         return _stats(0, 0, 0, [])
 
@@ -47,7 +48,7 @@ def run(force: bool = False) -> dict:
 
     for f in files:
         try:
-            with db_session() as db:
+            with instrument_write_lock, db_session() as db:
                 rows = _process_file(db, f["file_name"], f["trade_date"])
                 mark_synced(db, f["file_name"], rows)
                 db.commit()

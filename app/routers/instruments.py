@@ -37,6 +37,7 @@ class PendingRef(BaseModel):
     expiry_date:        Optional[str] = None
     strike_price_paise: Optional[int] = None
     contract_type:      Optional[str] = None
+    option_type:        Optional[str] = None
     mcx_symbol:         Optional[str] = None
     unit:               Optional[str] = None
 
@@ -125,9 +126,15 @@ def _resolve_fo_via_dao(ref: PendingRef, db: Database) -> Optional[dict]:
         ul_instr_id = dao.derivatives.resolve_underlying(db, ref.underlying_symbol, ref.exchange)
 
     strkp = ref.strike_price_paise / 100 if ref.strike_price_paise is not None else None
+    # opn_type on instrument_derivatives holds CE/PE/'-', not FUTURES/OPTIONS
+    # (that's contract_type, a different column) -- ref.option_type is the
+    # right field here. Passing ref.contract_type (as this used to) filtered
+    # a CE/PE column against a FUTURES/OPTIONS value, so it could never match
+    # and OPTIONS resolution silently fell through to the nse_bse_id branch
+    # or failed outright.
     row = dao.resolve(db, "DERIVATIVES", exchange=ref.exchange, nse_bse_id=ref.nse_fininstrmid,
                        ul_instr_id=ul_instr_id, expd=ref.expiry_date, strkp=strkp,
-                       opn_type=ref.contract_type)
+                       opn_type=ref.option_type)
     if not row:
         return None
 

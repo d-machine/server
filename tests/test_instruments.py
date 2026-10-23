@@ -227,6 +227,35 @@ class TestIndexAndDerivativesResolve:
         assert resolved[0]["fo_nse_fininstrmid"] == 2001
         assert resolved[0]["fo_bse_fininstrmid"] is None
 
+    def test_resolve_options_contract_by_underlying_expiry_strike_and_option_type(
+        self, client, bearer_with_sub, main_engine
+    ):
+        """Regression: _resolve_fo_via_dao filtered opn_type (CE/PE/'-')
+        against ref.contract_type (FUTURES/OPTIONS) instead of
+        ref.option_type -- a value that can never match a stored opn_type,
+        so this composite-key resolve path (no nse_fininstrmid -- used when
+        a pending ref only carries underlying/expiry/strike/option_type)
+        silently returned nothing for every OPTIONS contract."""
+        seed_derivative(
+            main_engine, exchange="NSE", nse_bse_id=4001, contract_type="OPTIONS",
+            expd="2026-06-25", strkp=1200.0, opn_type="CE",
+        )
+        r = client.post("/instruments/resolve", json=[{
+            "pending_id": 1, "instrument_type": "OPTIONS", "exchange": "NSE",
+            "underlying_symbol": "UNDLY", "expiry_date": "2026-06-25",
+            "strike_price_paise": 120000, "option_type": "CE",
+            # contract_type set too, same as a real pending ref would carry --
+            # the bug filtered opn_type against THIS field instead of
+            # option_type, so it must be present (and != "CE") for this test
+            # to actually exercise the fix rather than passing vacuously.
+            "contract_type": "OPTIONS",
+        }], headers=bearer_with_sub)
+        assert r.status_code == 200
+        resolved = r.json()["resolved"]
+        assert len(resolved) == 1
+        assert resolved[0]["fo_option_type"] == "CE"
+        assert resolved[0]["fo_strike_price_paise"] == 120000
+
     def test_nse_and_bse_contracts_with_same_fin_id_do_not_collide(self, client, bearer_with_sub, main_engine):
         """The core Phase 4 design change: NSE and BSE F&O contracts are
         separate rows (exchange discriminator), not merged via two id

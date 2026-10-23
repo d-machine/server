@@ -191,16 +191,32 @@ def bulk_update_equity_fields(db, updates: list[dict]):
     """
     Update metadata for existing equity instruments from bhavcopy.
     Each item: {instrument_id, name?, nse_symbol?, nse_id?, bse_code?,
-    bse_id?, face_value?} — face_value is REAL rupees. 'name' has no home on
-    instrument_equity anymore (nse_name/bse_name instead) — silently dropped
-    if passed, since no current caller actually provides it. Does not
-    commit — caller commits.
+    bse_id?, face_value?} — face_value is REAL rupees.
+
+    'name' writes to nse_name -- the same slot bulk_create_equity() already
+    uses for a brand-new instrument's name regardless of which exchange's
+    file created it, so this is consistent with that existing convention,
+    not a new one.
+
+    Confirmed need: a real corporate rename (ISIN INE882B01037, "Integrated
+    Industries Limited" -> "Nurture Well Industries Limited", same ISIN and
+    BSE scrip code 531889 throughout) was never picked up after the
+    instrument's first-ever sync in Oct 2024, because 'name' used to be
+    silently dropped here -- every bhavcopy file since (including today's)
+    has reported the correct new name, but nothing ever wrote it back.
+    Unconditional (no old-vs-new comparison) to match every other field
+    this function already updates the same way; the daily no-op rewrite for
+    an unchanged name costs one UPDATE, not correctness.
+
+    Does not commit — caller commits.
     """
     if not updates:
         return
     translated = []
     for item in updates:
         fields = {"instr_id": item["instrument_id"]}
+        if item.get("name") is not None:
+            fields["nse_name"] = item["name"]
         if item.get("nse_symbol") is not None:
             fields["nse_sym"] = item["nse_symbol"]
         if item.get("nse_id") is not None:

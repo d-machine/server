@@ -109,11 +109,19 @@ def _process_file(db, file_name: str, trade_date_str: str) -> int:
         id_map.update(new_ids)
 
     # -- Pass 4: fill in missing fields on existing instruments ------------------
+    # Includes 'name' so a corporate rename (ISIN/scrip code unchanged, new
+    # company name only) actually reaches the DB instead of being silently
+    # dropped forever after the instrument's first-ever sync -- confirmed
+    # live for ISIN INE882B01037 ("Integrated Industries Limited" -> renamed
+    # "Nurture Well Industries Limited" sometime after Oct 2024), see
+    # bulk_update_equity_fields()'s docstring in base.py.
     updates = []
     for isin, meta in isin_meta.items():
         inst_id = id_map.get(isin)
         if inst_id and isin not in (m["isin"] for m in missing):
             upd = {"instrument_id": inst_id}
+            if meta.get("name"):
+                upd["name"] = meta["name"]
             if meta.get("nse_symbol"):
                 upd["nse_symbol"] = meta["nse_symbol"]
             if meta.get("nse_id") is not None:

@@ -1,8 +1,10 @@
+import hashlib
 import json
+import re
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import text
 from arthdesk_db import Database
 
@@ -13,11 +15,37 @@ from app.routers.subscriptions import _fy_bounds
 
 router = APIRouter()
 
+_PAN_RE = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+
 
 class PersonCreate(BaseModel):
-    pan_hash: str
-    masked_pan: str
+    pan: str
     display_name: str
+
+    @field_validator("pan")
+    @classmethod
+    def _validate_pan(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not _PAN_RE.match(v):
+            raise ValueError("Invalid PAN format (expected e.g. ABCDE1234F)")
+        return v
+
+
+def _hash_pan(pan: str, pan_salt: str) -> str:
+    """SHA-512(PAN + per-user salt) -- same scheme the website's account.js
+    used to compute client-side. The server now does this itself (PersonCreate
+    takes the raw pan, never pan_hash/masked_pan from the caller) so every
+    client sends the same plaintext PAN and gets identical hashing/masking
+    without each one re-implementing the crypto. The server still never
+    *stores* the raw PAN -- only pan_hash and masked_pan land in the DB,
+    computed here and discarded from memory once the request completes."""
+    return hashlib.sha512((pan + pan_salt).encode()).hexdigest()
+
+
+def _mask_pan(pan: str) -> str:
+    """First 5 chars + last 1 char visible, middle 4 digits masked --
+    matches the PAN structure (5 letters + 4 digits + 1 letter)."""
+    return pan[:5] + "****" + pan[9:]
 
 
 def _required_price(gains: float | None) -> int:
@@ -123,9 +151,18 @@ def create_person(
     user: dict = Depends(get_current_user),
     auth_db: Database = Depends(get_auth_db),
 ):
+    salt_row = auth_db.execute(
+        text("SELECT pan_salt FROM users WHERE user_id = :uid"),
+        {"uid": user["user_id"]},
+    ).fetchone()
+    pan_hash   = _hash_pan(body.pan, salt_row[0])
+    masked_pan = _mask_pan(body.pan)
+    # body.pan itself is never persisted or passed to any other function
+    # from here on -- only pan_hash/masked_pan, computed above, touch the DB.
+
     existing = auth_db.execute(
         text("SELECT person_id FROM persons WHERE user_id = :uid AND pan_hash = :ph"),
-        {"uid": user["user_id"], "ph": body.pan_hash},
+        {"uid": user["user_id"], "ph": pan_hash},
     ).fetchone()
     if existing:
         raise HTTPException(status_code=409, detail="Person with this PAN already registered")
@@ -137,8 +174,8 @@ def create_person(
         """),
         {
             "uid": user["user_id"],
-            "ph":  body.pan_hash,
-            "mp":  body.masked_pan,
+            "ph":  pan_hash,
+            "mp":  masked_pan,
             "dn":  body.display_name,
         },
     )

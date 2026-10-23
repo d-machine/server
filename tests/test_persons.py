@@ -1,6 +1,7 @@
 """Tests for GET/POST/DELETE /persons and GET /persons/secure."""
 
 import base64
+import hashlib
 import json
 from io import BytesIO
 from unittest.mock import patch
@@ -42,11 +43,14 @@ def _decrypt_response(encrypted: str, private_key) -> list:
 
 
 # ── Tests: POST /persons ──────────────────────────────────────────────────────
+# The server now receives the raw PAN and computes pan_hash/masked_pan
+# itself (salt never leaves the server, see app/routers/persons.py) --
+# callers send {pan, display_name}, never pan_hash/masked_pan directly.
 
 def test_create_person(client, bearer):
     r = client.post(
         "/persons",
-        json={"pan_hash": "hash1", "masked_pan": "ABCDE****F", "display_name": "Alice"},
+        json={"pan": "ABCDE1234F", "display_name": "Alice"},
         headers=bearer,
     )
     assert r.status_code == 201
@@ -56,18 +60,58 @@ def test_create_person(client, bearer):
 
 
 def test_create_person_duplicate_rejected(client, bearer):
-    payload = {"pan_hash": "samehash", "masked_pan": "ABCDE****F", "display_name": "Alice"}
+    payload = {"pan": "ABCDE1234F", "display_name": "Alice"}
     client.post("/persons", json=payload, headers=bearer)
     r = client.post("/persons", json=payload, headers=bearer)
     assert r.status_code == 409
 
 
+def test_create_person_rejects_invalid_pan_format(client, bearer):
+    r = client.post(
+        "/persons",
+        json={"pan": "NOT-A-REAL-PAN", "display_name": "Alice"},
+        headers=bearer,
+    )
+    assert r.status_code == 422
+
+
+def test_create_person_normalises_case_for_duplicate_check(client, bearer):
+    """A lowercase/whitespace-padded PAN must still be recognised as the
+    same PAN as its canonical uppercase form (same pan_hash either way)."""
+    client.post("/persons", json={"pan": "ABCDE1234F", "display_name": "Alice"}, headers=bearer)
+    r = client.post("/persons", json={"pan": " abcde1234f ", "display_name": "Alice 2"}, headers=bearer)
+    assert r.status_code == 409
+
+
+def test_create_person_hash_uses_per_user_salt(client, auth_engine):
+    """Two different users registering the SAME real PAN must get different
+    pan_hash values -- proof the salt is actually per-user, not a constant,
+    and that it's applied server-side (callers never see or supply it)."""
+    from tests.conftest import register_user, login_user
+
+    register_user(client, email="userA@example.com")
+    bearer_a = {"Authorization": f"Bearer {login_user(client, email='userA@example.com')['access_token']}"}
+    register_user(client, email="userB@example.com")
+    bearer_b = {"Authorization": f"Bearer {login_user(client, email='userB@example.com')['access_token']}"}
+
+    client.post("/persons", json={"pan": "ABCDE1234F", "display_name": "A"}, headers=bearer_a)
+    client.post("/persons", json={"pan": "ABCDE1234F", "display_name": "B"}, headers=bearer_b)
+
+    with auth_engine.connect() as conn:
+        from sqlalchemy import text
+        rows = conn.execute(text("SELECT display_name, pan_hash FROM persons ORDER BY display_name")).fetchall()
+    assert len(rows) == 2
+    assert rows[0][1] != rows[1][1]  # same PAN, different hash per user
+
+
 def test_create_person_requires_auth(client):
     r = client.post(
         "/persons",
-        json={"pan_hash": "h", "masked_pan": "A****F", "display_name": "X"},
+        json={"pan": "ABCDE1234F", "display_name": "X"},
     )
-    assert r.status_code == 422  # missing Authorization header
+    # Was 422 (Header(...) failed FastAPI's own request validation before
+    # get_current_user ran) -- fixed in deps.py to return the intended 401.
+    assert r.status_code == 401
 
 
 # ── Tests: GET /persons (website, no masked_pan) ─────────────────────────────
@@ -99,8 +143,11 @@ def test_list_persons_secure_returns_encrypted(client, bearer, person_id):
 
     persons = _decrypt_response(encrypted, private_key)
     assert len(persons) == 1
+    # person_id fixture creates with pan="ABCDE1234F" -- masked_pan is
+    # deterministic from that; pan_hash is salted server-side so only its
+    # shape (sha512 hex digest), not an exact value, is checked here.
     assert persons[0]["masked_pan"] == "ABCDE****F"
-    assert persons[0]["pan_hash"] == "aabbcc"
+    assert len(persons[0]["pan_hash"]) == 128
     assert persons[0]["display_name"] == "Test Person"
 
 
@@ -140,7 +187,7 @@ def test_cannot_delete_other_users_person(client, bearer):
     register_user(client, email="other@example.com")
     other_login = login_user(client, email="other@example.com")
     other_bearer = {"Authorization": f"Bearer {other_login['access_token']}"}
-    other_pid = create_person(client, other_bearer, pan_hash="otherhash")
+    other_pid = create_person(client, other_bearer, pan="FGHIJ5678K")
 
     # First user tries to delete it
     r = client.delete(f"/persons/{other_pid}", headers=bearer)

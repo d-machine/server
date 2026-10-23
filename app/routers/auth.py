@@ -236,12 +236,10 @@ def logout(req: LogoutRequest, auth_db: Database = Depends(get_auth_db)):
 
 @router.get("/me")
 def me(user: dict = Depends(get_current_user), auth_db: Database = Depends(get_auth_db)):
-    row = auth_db.execute(
-        text("SELECT pan_salt FROM users WHERE user_id = :uid"),
-        {"uid": user["user_id"]},
-    ).fetchone()
-    pan_salt = row[0] if row else ""
-    return {**user, "pan_salt": pan_salt, "subscription": _subscription_info(auth_db, user["user_id"])}
+    # pan_salt is intentionally NOT returned here (or anywhere else) --
+    # it must never leave the server. PAN hashing/masking now happens
+    # entirely server-side in POST /persons; see app/routers/persons.py.
+    return {**user, "subscription": _subscription_info(auth_db, user["user_id"])}
 
 
 @router.post("/forgot-password")

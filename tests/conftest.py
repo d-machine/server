@@ -154,10 +154,12 @@ def admin_headers():
     return {"Authorization": f"Basic {creds}"}
 
 
-def create_person(client, bearer, pan_hash="aabbcc", masked_pan="ABCDE****F", display_name="Test Person"):
+def create_person(client, bearer, pan="ABCDE1234F", display_name="Test Person"):
+    """pan is the raw PAN -- the server computes pan_hash/masked_pan itself
+    (see app/routers/persons.py), the caller never sends those directly."""
     r = client.post(
         "/persons",
-        json={"pan_hash": pan_hash, "masked_pan": masked_pan, "display_name": display_name},
+        json={"pan": pan, "display_name": display_name},
         headers=bearer,
     )
     assert r.status_code == 201, r.text
@@ -212,9 +214,11 @@ def seed_index(main_engine, sym="NIFTY"):
 
 
 def seed_derivative(main_engine, exchange="NSE", nse_bse_id=1001, ul_instr_id=None,
-                     contract_type="FUTURES", expd="2026-12-31"):
+                     contract_type="FUTURES", expd="2026-12-31", strkp=0.0, opn_type="-"):
     """Insert a minimal derivatives contract directly into the test DB.
-    Auto-creates an underlying equity if ul_instr_id isn't given."""
+    Auto-creates an underlying equity (nse_sym="UNDLY") if ul_instr_id isn't
+    given -- matches the "underlying_symbol": "UNDLY" a caller resolving by
+    composite key (underlying+expiry+strike+option_type) should pass."""
     from arthdesk_instruments import dao
 
     with main_engine.begin() as conn:
@@ -222,7 +226,7 @@ def seed_derivative(main_engine, exchange="NSE", nse_bse_id=1001, ul_instr_id=No
             ul_instr_id = dao.equity.create(conn, isin="INE000UNDLY1", nse_sym="UNDLY")["instr_id"]
         result = dao.derivatives.bulk_create(conn, exchange, [{
             "nse_bse_id": nse_bse_id, "nse_bse_name": "TEST CONTRACT", "ul_instr_id": ul_instr_id,
-            "contract_type": contract_type, "expd": expd, "strkp": 0.0, "opn_type": "-",
+            "contract_type": contract_type, "expd": expd, "strkp": strkp, "opn_type": opn_type,
             "lot_size": 1, "instrument_type_name": contract_type,
         }])
         return result[nse_bse_id]

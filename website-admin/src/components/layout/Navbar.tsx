@@ -23,7 +23,7 @@ export function Navbar({ username }: Props) {
     <nav className="bg-slate-800 sticky top-0 z-40">
       <div className="max-w-[1200px] mx-auto px-5 h-14 flex items-center gap-6">
         <span className="font-bold text-white text-[1.05rem] tracking-tight shrink-0">
-          ArthaDesk Admin
+          ArthDesk Admin
         </span>
         <div className="flex items-center gap-1 flex-1">
           {links.map(l => (

@@ -35,7 +35,7 @@ export function LoginPage() {
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl p-10 w-full max-w-sm">
-        <h1 className="text-2xl font-bold text-center text-slate-900 mb-1">ArthaDesk Admin</h1>
+        <h1 className="text-2xl font-bold text-center text-slate-900 mb-1">ArthDesk Admin</h1>
         <p className="text-sm text-slate-500 text-center mb-8">Sign in to continue</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">

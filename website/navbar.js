@@ -28,7 +28,7 @@
 
   el.innerHTML = `
     <div class="w-full px-6 h-14 flex items-center gap-6">
-      <a href="/" class="font-bold text-lg text-white tracking-tight shrink-0">ArthaDesk</a>
+      <a href="/" class="font-bold text-lg text-white tracking-tight shrink-0">ArthDesk</a>
       <div class="flex gap-1 items-center flex-1">
         ${publicLinks}
         ${authLinks}

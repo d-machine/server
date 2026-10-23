@@ -24,7 +24,7 @@ from app.database import db_session
 from app.cron.bhavcopy.sync.base import (
     get_pending_files, load_file_chunks, mark_synced, mark_failed,
     to_int, to_float,
-    bulk_resolve_fo_nse, bulk_create_fo,
+    bulk_resolve_fo_nse_full, bulk_create_fo,
     bulk_resolve_underlying_symbols,
     get_or_create_index,
     upsert_latest_prices,
@@ -96,18 +96,42 @@ def _process_chunk(db, df: pd.DataFrame, trade_date_str: str, file_name: str) ->
         return 0
     df["fin_id_parsed"] = df["fin_id_parsed"].astype(int)
 
-    # -- Pass 2: ONE SELECT for all unique fin_ids in this chunk, scoped to NSE --
+    # -- Pass 2: metadata for every fin_id up front -- needed both to
+    # validate an id-based hit (Pass 3) and to build create-specs for a
+    # genuine miss, so it's computed once here rather than twice.
     unique_fin_ids = df["fin_id_parsed"].unique().tolist()
-    id_map = bulk_resolve_fo_nse(db, unique_fin_ids)
+    fid_meta = _build_fid_meta(db, unique_fin_ids, df)
 
-    # -- Pass 3: batch-resolve underlyings, bulk-create whatever NSE doesn't have yet
-    missing_ids = [fid for fid in unique_fin_ids if fid not in id_map]
+    # -- Pass 3: ONE SELECT for all unique fin_ids in this chunk, scoped to
+    # NSE -- then VALIDATE each hit against fid_meta rather than trusting
+    # the id alone. NSE recycles FinInstrmId for an unrelated contract once
+    # the original expires (observed in practice), so a row found by id can
+    # be a stale match for a completely different contract; accepting it
+    # as-is would silently write today's trade data onto someone else's
+    # instrument. A mismatch is treated as a miss, same as if the id had
+    # never been seen -- falls through to Pass 4's find-or-create (which
+    # resolves by composite key, so it reuses the right existing row if
+    # one exists under a different id, or creates a fresh one).
+    raw_hits = bulk_resolve_fo_nse_full(db, unique_fin_ids)
+    id_map: dict[int, int] = {}
+    missing_ids: list[int] = []
+    for fid in unique_fin_ids:
+        meta = fid_meta.get(fid)
+        if meta is None:
+            continue   # unparseable row (e.g. bad expiry) -- already warned in _build_fid_meta
+        stored = raw_hits.get(fid)
+        if stored is not None and _row_matches(stored, meta):
+            id_map[fid] = stored["instr_id"]
+        else:
+            missing_ids.append(fid)
+
+    # -- Pass 4: bulk-create (or composite-key-match) whatever's missing ---
     if missing_ids:
-        new_specs = _build_new_specs(db, missing_ids, df)
+        new_specs = _specs_from_meta(fid_meta, missing_ids)
         if new_specs:
             id_map.update(bulk_create_fo(db, new_specs, "NSE"))
 
-    # -- Pass 4: map instrument_ids vectorized --------------------------------
+    # -- Pass 5: map instrument_ids vectorized --------------------------------
     df["inst_id_mapped"] = df["fin_id_parsed"].map(id_map)
     skipped += int(df["inst_id_mapped"].isna().sum())
     df = df[df["inst_id_mapped"].notna()].copy()
@@ -117,7 +141,7 @@ def _process_chunk(db, df: pd.DataFrame, trade_date_str: str, file_name: str) ->
         return 0
     df["inst_id_mapped"] = df["inst_id_mapped"].astype(int)
 
-    # -- Pass 5: build fo_eod batch with itertuples ---------------------------
+    # -- Pass 6: build fo_eod batch with itertuples ---------------------------
     batch = []
     for row in df.itertuples(index=False):
         trade_date = str(getattr(row, "TradDt", trade_date_str)).strip()[:10]
@@ -184,22 +208,22 @@ def _process_chunk(db, df: pd.DataFrame, trade_date_str: str, file_name: str) ->
     return len(batch)
 
 
-def _build_new_specs(db, missing_ids: list[int], df: pd.DataFrame) -> list[dict]:
+def _build_fid_meta(db, fin_ids: list[int], df: pd.DataFrame) -> dict[int, dict]:
     """
-    Batch-resolve underlyings for all missing fin_ids (one lookup per unique
-    symbol, not per fin_id), then build the create-spec for each.
+    Parse + resolve full contract metadata for EVERY given fin_id, not just
+    ones missing from the fast id-based lookup -- needed to validate an
+    id-based hit (_row_matches) as well as to build the create-spec for a
+    genuine miss, so this always runs once per chunk rather than being
+    skipped for ids the fast path thinks it already knows.
 
-    No cross-exchange contract-matching here anymore (removed, along with
-    bulk_resolve_fo_contracts_by_underlying in base.py) — NSE and BSE
-    contracts are separate rows by design now (exchange discriminator), so
-    there's no "maybe BSE already created this" row to find and link to.
-    bulk_resolve_fo_nse already told us this exact fin_id doesn't exist on
-    NSE; that's the only check needed before creating.
+    Returns {fin_id: {symbol, instr_type, expiry_date, strike_raw,
+    strike_paise, option_type, lot_size, underlying_id}}. A fin_id with an
+    unparseable expiry is omitted (warned, not raised) -- same as before.
     """
-    missing_set = set(missing_ids)
+    fid_set = set(fin_ids)
 
     fid_meta: dict[int, dict] = {}
-    subset = df[df["fin_id_parsed"].isin(missing_set)].drop_duplicates("fin_id_parsed")
+    subset = df[df["fin_id_parsed"].isin(fid_set)].drop_duplicates("fin_id_parsed")
     for row in subset.itertuples(index=False):
         fid        = row.fin_id_parsed
         symbol     = str(getattr(row, "TckrSymb", "")).strip()
@@ -232,7 +256,7 @@ def _build_new_specs(db, missing_ids: list[int], df: pd.DataFrame) -> list[dict]
         }
 
     if not fid_meta:
-        return []
+        return {}
 
     unique_symbols = list({m["symbol"] for m in fid_meta.values()})
     symbol_map = bulk_resolve_underlying_symbols(db, unique_symbols)
@@ -240,21 +264,50 @@ def _build_new_specs(db, missing_ids: list[int], df: pd.DataFrame) -> list[dict]
         if sym not in symbol_map:
             symbol_map[sym] = get_or_create_index(db, sym, EXCHANGE)
 
-    new_specs: list[dict] = []
-    for fid, meta in fid_meta.items():
-        underlying_id = symbol_map[meta["symbol"]]
-        inst_kind = _TYPE_MAP.get(meta["instr_type"], "FUTURES")
-        symbol    = meta["symbol"]
+    for meta in fid_meta.values():
+        meta["underlying_id"] = symbol_map[meta["symbol"]]
+
+    return fid_meta
+
+
+def _row_matches(stored: dict, meta: dict) -> bool:
+    """
+    True if a row found by nse_bse_id still represents the SAME contract
+    the current file's row describes for that id -- i.e. the exchange
+    hasn't recycled this id for an unrelated contract since it was created.
+    Compares the identity fields that actually define a contract
+    (underlying, expiry, strike, option type); created_at/lot_size etc.
+    are irrelevant to identity and not compared.
+    """
+    stored_strike = stored.get("strkp") or 0.0
+    meta_strike = meta["strike_paise"] / 100
+    return (
+        stored.get("ul_instr_id") == meta["underlying_id"]
+        and stored.get("expd") == meta["expiry_date"]
+        and abs(stored_strike - meta_strike) < 1e-6
+        and (stored.get("opn_type") or "-") == meta["option_type"]
+    )
+
+
+def _specs_from_meta(fid_meta: dict, fids: list[int]) -> list[dict]:
+    """Build bulk_create_fo's create-spec dicts from already-computed
+    fid_meta (see _build_fid_meta) for the given fids -- no re-parsing."""
+    specs: list[dict] = []
+    for fid in fids:
+        meta = fid_meta.get(fid)
+        if meta is None:
+            continue
+        symbol = meta["symbol"]
         name = (
             f"{symbol} {meta['expiry_date']} {meta['strike_raw']} {meta['option_type']}"
             if meta["option_type"] in ("CE", "PE")
             else f"{symbol} {meta['expiry_date']} FUT"
         )
-        new_specs.append({
+        specs.append({
             "fin_id":        fid,
             "name":          name,
-            "inst_kind":     inst_kind,
-            "underlying_id": underlying_id,
+            "inst_kind":     _TYPE_MAP.get(meta["instr_type"], "FUTURES"),
+            "underlying_id": meta["underlying_id"],
             "symbol":        symbol,
             "instr_type":    meta["instr_type"],
             "expiry_date":   meta["expiry_date"],
@@ -262,8 +315,7 @@ def _build_new_specs(db, missing_ids: list[int], df: pd.DataFrame) -> list[dict]
             "option_type":   meta["option_type"],
             "lot_size":      meta["lot_size"],
         })
-
-    return new_specs
+    return specs
 
 
 def _stats(synced, failed, rows, errors):

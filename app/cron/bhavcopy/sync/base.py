@@ -231,18 +231,23 @@ def bulk_update_equity_fields(db, updates: list[dict]):
     dao.equity.update_fields(db, translated)
 
 
-def bulk_resolve_fo_nse(db, fin_ids: list[int]) -> dict[int, int]:
-    """nse_bse_id -> instrument_id, scoped to NSE."""
+def bulk_resolve_fo_nse_full(db, fin_ids: list[int]) -> dict[int, dict]:
+    """nse_bse_id -> full instrument_derivatives row, scoped to NSE. Full
+    row (not just instr_id) so the caller can verify the match is still
+    the same contract before trusting it -- NSE recycles FinInstrmId for
+    an unrelated contract once the original expires, so a found id alone
+    doesn't guarantee it still means what the caller thinks it does."""
     if not fin_ids:
         return {}
-    return dao.derivatives.bulk_resolve_by_id(db, "NSE", fin_ids)
+    return dao.derivatives.bulk_resolve_by_id_full(db, "NSE", fin_ids)
 
 
-def bulk_resolve_fo_bse(db, fin_ids: list[int]) -> dict[int, int]:
-    """nse_bse_id -> instrument_id, scoped to BSE."""
+def bulk_resolve_fo_bse_full(db, fin_ids: list[int]) -> dict[int, dict]:
+    """nse_bse_id -> full instrument_derivatives row, scoped to BSE. See
+    bulk_resolve_fo_nse_full's docstring -- same id-recycling concern."""
     if not fin_ids:
         return {}
-    return dao.derivatives.bulk_resolve_by_id(db, "BSE", fin_ids)
+    return dao.derivatives.bulk_resolve_by_id_full(db, "BSE", fin_ids)
 
 
 def bulk_resolve_underlying_symbols(db, symbols: list[str]) -> dict[str, int]:

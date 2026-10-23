@@ -243,6 +243,115 @@ class TestFoSyncNseAndBseStaySeparate:
         assert rows[0]["contract_type"] == "STF"
 
 
+class TestFoRecycledFinInstrmId:
+    """
+    Regression for a real production bug found during the Jan-Oct 2026
+    F&O backfill: NSE (and, by the same mechanism, BSE) reuses a
+    FinInstrmId for an unrelated contract once the original expires.
+    Trusting an id-based match blindly (the old behavior) silently wrote
+    the NEW contract's price data onto the OLD contract's row -- e.g. id
+    151946 belonged to "TECHM 2026-01-27 1800 CE" (expired), then NSE
+    reissued it for "SBIN 2026-05-26 1200 CE": the sync kept treating
+    every SBIN row as if it were the TECHM contract, so SBIN's own
+    instrument_derivatives row never got created at all.
+    """
+
+    def test_nse_recycled_fin_instr_id_creates_new_contract_not_overwrite(
+        self, sync_engine, db, monkeypatch
+    ):
+        eq_df = pd.DataFrame([
+            {"ISIN": "INE009A01021", "TckrSymb": "TECHM",  "ClsPric": "1700.00"},
+            {"ISIN": "INE062A01020", "TckrSymb": "SBIN",   "ClsPric": "800.00"},
+        ])
+        monkeypatch.setattr(nse_eq, "load_file_df", lambda *a, **k: eq_df)
+        nse_eq._process_file(db, "eq.csv", "2026-01-05")
+        db.commit()
+
+        # Day 1: id 151946 is TECHM's 27-Jan-2026 1800 CE option.
+        techm_df = pd.DataFrame([{
+            "FinInstrmId": "151946", "TckrSymb": "TECHM", "FinInstrmTp": "STO",
+            "XpryDt": "2026-01-27", "StrkPric": "1800", "OptnTp": "CE",
+            "ClsPric": "12.50", "TradDt": "2026-01-05",
+        }])
+        monkeypatch.setattr(nse_fo, "load_file_chunks", lambda *a, **k: [techm_df])
+        nse_fo._process_file(db, "fo_day1.csv", "2026-01-05")
+        db.commit()
+
+        rows = _derivatives_rows(sync_engine)
+        assert len(rows) == 1
+        techm_instr_id = rows[0]["instr_id"]
+        assert rows[0]["expd"] == "2026-01-27"
+        assert rows[0]["strkp"] == 1800.0
+
+        # Day 2 (after TECHM's contract has expired): NSE has recycled the
+        # SAME id for an unrelated SBIN contract.
+        sbin_df = pd.DataFrame([{
+            "FinInstrmId": "151946", "TckrSymb": "SBIN", "FinInstrmTp": "STO",
+            "XpryDt": "2026-05-26", "StrkPric": "1200", "OptnTp": "CE",
+            "ClsPric": "41.75", "TradDt": "2026-05-08",
+        }])
+        monkeypatch.setattr(nse_fo, "load_file_chunks", lambda *a, **k: [sbin_df])
+        nse_fo._process_file(db, "fo_day2.csv", "2026-05-08")
+        db.commit()
+
+        rows = _derivatives_rows(sync_engine)
+        assert len(rows) == 2, "SBIN's contract must get its own row, not reuse TECHM's"
+
+        techm_row = next(r for r in rows if r["instr_id"] == techm_instr_id)
+        assert techm_row["expd"] == "2026-01-27"
+        assert techm_row["strkp"] == 1800.0
+
+        sbin_row = next(r for r in rows if r["instr_id"] != techm_instr_id)
+        assert sbin_row["expd"] == "2026-05-26"
+        assert sbin_row["strkp"] == 1200.0
+        assert sbin_row["opn_type"] == "CE"
+
+        # Each contract's own price row is attached to ITS OWN instr_id,
+        # not mixed together under the recycled id.
+        eod_rows = _fo_eod_rows(sync_engine)
+        techm_eod = [r for r in eod_rows if r["instr_id"] == techm_instr_id]
+        sbin_eod  = [r for r in eod_rows if r["instr_id"] == sbin_row["instr_id"]]
+        assert len(techm_eod) == 1 and techm_eod[0]["close_price"] == 12.50
+        assert len(sbin_eod) == 1 and sbin_eod[0]["close_price"] == 41.75
+
+    def test_bse_recycled_fin_instr_id_creates_new_contract_not_overwrite(
+        self, sync_engine, db, monkeypatch
+    ):
+        eq_df = pd.DataFrame([
+            {"ISIN": "INE009A01021", "TckrSymb": "TECHM", "ClsPric": "1700.00"},
+            {"ISIN": "INE062A01020", "TckrSymb": "SBIN",  "ClsPric": "800.00"},
+        ])
+        monkeypatch.setattr(nse_eq, "load_file_df", lambda *a, **k: eq_df)
+        nse_eq._process_file(db, "eq.csv", "2026-01-05")
+        db.commit()
+
+        techm_df = pd.DataFrame([{
+            "FinInstrmId": "222333", "TckrSymb": "TECHM", "FinInstrmTp": "STO",
+            "XpryDt": "2026-01-27", "StrkPric": "1800", "OptnTp": "CE",
+            "ClsPric": "12.50", "TradDt": "2026-01-05",
+        }])
+        monkeypatch.setattr(bse_fo, "load_file_df", lambda *a, **k: techm_df)
+        bse_fo._process_file(db, "fo_day1.csv", "2026-01-05")
+        db.commit()
+
+        techm_instr_id = _derivatives_rows(sync_engine)[0]["instr_id"]
+
+        sbin_df = pd.DataFrame([{
+            "FinInstrmId": "222333", "TckrSymb": "SBIN", "FinInstrmTp": "STO",
+            "XpryDt": "2026-05-26", "StrkPric": "1200", "OptnTp": "CE",
+            "ClsPric": "41.75", "TradDt": "2026-05-08",
+        }])
+        monkeypatch.setattr(bse_fo, "load_file_df", lambda *a, **k: sbin_df)
+        bse_fo._process_file(db, "fo_day2.csv", "2026-05-08")
+        db.commit()
+
+        rows = _derivatives_rows(sync_engine)
+        assert len(rows) == 2
+        sbin_row = next(r for r in rows if r["instr_id"] != techm_instr_id)
+        assert sbin_row["expd"] == "2026-05-26"
+        assert sbin_row["strkp"] == 1200.0
+
+
 class TestFoLatestPrices:
     """New coverage: F&O sync never wrote latest_prices before this round
     (an equity-only gap from Phase 4)."""

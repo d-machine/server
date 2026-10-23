@@ -18,8 +18,12 @@ class TestGetCurrentUser:
         assert "user_id" in r.json()
 
     def test_missing_authorization_header(self, client):
+        """Regression: Header(...) (required) used to fail FastAPI's own
+        request validation before get_current_user ever ran, returning 422
+        instead of the intended 401. Header(None) + an explicit check fixes
+        this -- missing and malformed Authorization headers now both 401."""
         r = client.get("/auth/me")
-        assert r.status_code in (401, 422)
+        assert r.status_code == 401
 
     def test_malformed_bearer(self, client):
         r = client.get("/auth/me", headers={"Authorization": "NotBearer token"})

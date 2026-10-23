@@ -150,10 +150,16 @@ def _send_underpaid_email(auth_db, user_id: int, required_price: int, underpaid_
 
 
 def get_current_user(
-    authorization: str = Header(...),
+    authorization: str | None = Header(None),
     auth_db: Database = Depends(get_auth_db),
 ) -> dict:
-    if not authorization.startswith("Bearer "):
+    # Header(None) + explicit check (not Header(...)) -- a required Header(...)
+    # is validated by FastAPI's own request-parsing layer before this function
+    # ever runs, so a missing Authorization header produced 422 Unprocessable
+    # Entity instead of this endpoint's intended 401. Declaring it optional
+    # and checking for None ourselves makes "missing" and "malformed" both
+    # resolve to the same 401, which is what every caller actually expects.
+    if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
     token = authorization[7:]
     try:

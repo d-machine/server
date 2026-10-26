@@ -90,14 +90,14 @@ def _send_underpaid_reminders():
 
             msg = MIMEText(
                 f"Hi,\n\n"
-                f"This is a reminder that your ArthaDesk subscription needs to be upgraded.\n"
+                f"This is a reminder that your ArthDesk subscription needs to be upgraded.\n"
                 f"Your required plan price is ₹{required_price:,}/year.\n\n"
                 f"Your Capital Gains and Tax features will be locked on {lock_date}.\n\n"
                 f"Upgrade here: {base_url}/subscribe.html\n\n"
-                f"— ArthaDesk Team",
+                f"— ArthDesk Team",
                 "plain",
             )
-            msg["Subject"] = f"Reminder: ArthaDesk subscription upgrade due {lock_date}"
+            msg["Subject"] = f"Reminder: ArthDesk subscription upgrade due {lock_date}"
             msg["From"]    = from_email
             msg["To"]      = email
 
@@ -117,6 +117,55 @@ def _send_underpaid_reminders():
         db.close()
 
 
+def _bhavcopy_daily_catchup():
+    """
+    Run daily: for each equity/F&O source, catch up from (last SYNCED
+    trade_date + 1) through yesterday, then parse. Self-healing by design --
+    if a previous run failed, was skipped (server down), or NSE/BSE published
+    late, the next run naturally fills the whole gap instead of only ever
+    attempting a fixed "today" offset. If a source is already caught up
+    through yesterday, catchup_range() returns [] and nothing happens for it
+    -- this is the "only run if data till yesterday is already synced" guard,
+    evaluated per source rather than once globally.
+    """
+    import random
+    import time
+    from datetime import datetime as _dt, timedelta as _td
+    from sqlalchemy import text as _text
+    from app.routers.bhavcopy import SOURCES, catchup_range
+    from app.cron.bhavcopy.sync import PARSERS
+    from app.cron.bhavcopy.constants import FileStatus
+
+    yesterday = date.today() - _td(days=1)
+
+    for source in ("NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO"):
+        try:
+            with db_session() as db:
+                row = db.fetch_one(
+                    _text("SELECT MAX(trade_date) AS d FROM bhavcopy_files WHERE source=:s AND status=:st"),
+                    {"s": source, "st": int(FileStatus.SYNCED)},
+                )
+            last_synced = row["d"] if row and row["d"] else None
+            dates = catchup_range(last_synced, yesterday)
+            if not dates:
+                continue
+
+            logger.info("[cron-bhavcopy] %s: catching up %d day(s) from %s to %s",
+                        source, len(dates), dates[0], dates[-1])
+            download_fn = SOURCES[source]
+            for i, d in enumerate(dates):
+                try:
+                    download_fn(d, force=False)
+                except Exception:
+                    logger.exception("[cron-bhavcopy] download failed: %s %s", source, d)
+                if i < len(dates) - 1:
+                    time.sleep(random.randint(10, 20))
+
+            PARSERS[source].run(force=False)
+        except Exception:
+            logger.exception("[cron-bhavcopy] catch-up failed for %s", source)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup ---
@@ -130,9 +179,11 @@ async def lifespan(app: FastAPI):
     _scheduler.add_job(_cancel_expired_subscriptions, "interval", hours=1)
     # 09:00 IST = 03:30 UTC
     _scheduler.add_job(_send_underpaid_reminders, "cron", hour=3, minute=30)
+    # 18:30 IST = 13:00 UTC -- after NSE/BSE end-of-day bhavcopy publication
+    _scheduler.add_job(_bhavcopy_daily_catchup, "cron", hour=13, minute=0)
     _scheduler.start()
 
-    logger.info("Server started — all cron jobs disabled, use /admin/* endpoints to trigger manually")
+    logger.info("Server started — subscription jobs + daily bhavcopy catch-up (18:30 IST) scheduled")
     yield
     # --- Shutdown ---
     _scheduler.shutdown(wait=False)

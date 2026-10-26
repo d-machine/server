@@ -118,6 +118,28 @@ def _trading_days(start: date, end: date) -> list[date]:
     return dates
 
 
+def catchup_range(last_synced: Optional[str], yesterday: date) -> list[date]:
+    """
+    Pure date-range decision for the daily catch-up cron (see main.py's
+    _bhavcopy_daily_catchup): given the last SYNCED trade_date for a source
+    (or None if nothing has ever synced) and "yesterday", return the trading
+    days still needing a download+parse pass. Empty list means already
+    caught up through yesterday -- the cron should do nothing for that source.
+
+    last_synced=None does NOT trigger a full historical backfill (that stays
+    a manual /admin/bhavcopy/download job) -- it just tries "yesterday" on
+    this run and will pick up from there on subsequent runs.
+    """
+    if last_synced:
+        last_date = datetime.strptime(last_synced, "%Y-%m-%d").date()
+        start = last_date + timedelta(days=1)
+    else:
+        start = yesterday
+    if start > yesterday:
+        return []
+    return _trading_days(start, yesterday)
+
+
 def _error_file_path(job_id: str) -> Path:
     ERRORS_DIR.mkdir(parents=True, exist_ok=True)
     return ERRORS_DIR / f"{job_id}.json"

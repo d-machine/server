@@ -3,8 +3,6 @@
 const token = sessionStorage.getItem('access_token');
 if (!token) window.location.href = '/auth';
 
-let panSalt = '';
-
 function authHeader() {
   return { Authorization: `Bearer ${token}` };
 }
@@ -22,7 +20,6 @@ async function load() {
     const persons = await personsRes.json();
     const sub     = await subRes.json();
 
-    panSalt = me.pan_salt || '';
     document.getElementById('acc-email').textContent = me.email;
     document.getElementById('acc-name').textContent  = me.name;
 
@@ -155,18 +152,6 @@ function toggleAddForm() {
 }
 window.toggleAddForm = toggleAddForm;
 
-async function hashPAN(pan) {
-  const combined = pan.toUpperCase().trim() + panSalt;
-  const buf = await crypto.subtle.digest('SHA-512', new TextEncoder().encode(combined));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function maskedPAN(pan) {
-  pan = pan.toUpperCase().trim();
-  if (pan.length !== 10) return null;
-  return pan.slice(0, 5) + '****' + pan.slice(9);
-}
-
 async function submitAddPerson() {
   document.getElementById('add-person-error').classList.add('hidden');
   document.getElementById('add-person-success').classList.add('hidden');
@@ -177,14 +162,13 @@ async function submitAddPerson() {
   if (!displayName) { showAddError('Please enter a display name.'); return; }
   if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) { showAddError('Please enter a valid PAN (e.g. ABCDE1234F).'); return; }
 
-  const masked  = maskedPAN(pan);
-  const panHash = await hashPAN(pan);
-
   try {
+    // Server hashes/masks the PAN itself now (see app/routers/persons.py) --
+    // it never leaves this request as anything but the raw value.
     const res = await fetch(`${API_BASE_URL}/persons`, {
       method: 'POST',
       headers: { ...authHeader(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pan_hash: panHash, masked_pan: masked, display_name: displayName }),
+      body: JSON.stringify({ pan, display_name: displayName }),
     });
     if (res.status === 409) { showAddError('This PAN is already registered under your account.'); return; }
     if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Registration failed'); }
